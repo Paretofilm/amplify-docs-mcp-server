@@ -1,0 +1,13 @@
+[project]
+name = "amplify-docs-mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "beautifulsoup4>=4.13.4",
+    "lxml>=6.0.0",
+    "mcp>=1.12.2",
+    "pydantic>=2.11.7",
+]

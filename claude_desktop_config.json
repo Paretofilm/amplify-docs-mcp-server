@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "amplify-docs": {
+      "command": "uv",
+      "args": ["run", "python", "amplify_docs_server.py"],
+      "env": {}
+    }
+  }
+}

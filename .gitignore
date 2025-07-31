@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+wheels/
+
+# Database
+amplify_docs.db
+amplify_docs.db-journal
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# UV/Python
+.python-version
+
+# Test outputs
+htmlcov/
+.coverage
+.pytest_cache/
+.tox/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+.~*
+
+# Local environment
+.env
+.env.local
+
+# Don't ignore the test database for the example
+!quick_test_fetch.py
