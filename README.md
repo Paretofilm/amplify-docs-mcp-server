@@ -2,6 +2,10 @@
 
 An MCP (Model Context Provider) server that provides tools for scraping, indexing, and searching AWS Amplify Gen 2 documentation. This server enables Claude Code, Claude Desktop, and other MCP clients to easily access and search through Amplify documentation patterns and examples.
 
+**MCP Python SDK Documentation
+This server is buil based on the MCP Python SDK documentation found here: https://github.com/modelcontextprotocol/python-sdk
+
+
 ## Features
 
 - **Documentation Scraping**: Automatically scrape and index AWS Amplify Gen 2 documentation
@@ -17,6 +21,48 @@ An MCP (Model Context Provider) server that provides tools for scraping, indexin
 
 - Python 3.8 or higher
 - uv (Python package manager)
+- Node.js and npm (for version checking)
+
+### Version Compatibility
+
+AWS Amplify Gen 2 is compatible with:
+- **Next.js**: 14.x or 15.x (both App Router and Pages Router)
+- **TypeScript**: 5.0 or higher (optional but recommended)
+- **Node.js**: 18.x or higher
+
+Use `uv run python amplify_cli.py check-versions` to verify compatibility.
+
+### Getting Started with Compatible Versions
+
+⚠️ **IMPORTANT**: Manual package installation often leads to version conflicts!
+
+For a new project with guaranteed compatible versions:
+
+1. **Use Amplify's Next.js starter template** (STRONGLY recommended):
+   ```bash
+   npx create-amplify@latest --template nextjs
+   ```
+   Or equivalently:
+   ```bash
+   npm create amplify@latest --template nextjs
+   ```
+   This creates a complete Next.js project with ALL compatible versions pre-configured.
+
+2. **Why manual installation is problematic**:
+   - Running `npm create amplify@latest` followed by `npm install next react react-dom` often causes dependency conflicts
+   - Amplify packages have specific peer dependency requirements
+   - Version mismatches can lead to ERESOLVE warnings and runtime issues
+
+3. **If you must use an existing Next.js project**:
+   - Ensure Next.js is version 14.x or 15.x
+   - Run `npm create amplify@latest`
+   - Install the exact versions that match your Amplify packages
+   - Be prepared to resolve dependency conflicts
+
+4. **Verify compatibility**:
+   ```bash
+   uv run python amplify_cli.py check-versions
+   ```
 
 ### Setup
 
@@ -61,15 +107,14 @@ Claude Code automatically discovers MCP servers. Simply ensure the server is run
 ## Available Tools
 
 ### 1. fetchLatestDocs
-Scrape and index the latest AWS Amplify Gen 2 documentation.
+Scrape and index all AWS Amplify Gen 2 documentation.
 
 **Parameters:**
-- `max_pages` (integer, optional): Maximum number of pages to scrape (default: 100)
 - `force_refresh` (boolean, optional): Force re-scraping even if documents exist (default: false)
 
 **Example:**
 ```
-Use fetchLatestDocs with max_pages: 50
+Use fetchLatestDocs to index all Amplify documentation
 ```
 
 ### 2. searchDocs
@@ -181,6 +226,79 @@ uv run python amplify_docs_server.py
 ./run_server.sh
 ```
 
+## Command Line Interface (CLI)
+
+The project includes a CLI tool (`amplify_cli.py`) for direct interaction with the documentation database without running the MCP server.
+
+### Automatic Update Reminders
+
+The CLI automatically checks if your documentation is outdated (more than 30 days old) when you run any command except `fetch`. If an update is needed, you'll be prompted to update. If you decline, the system will wait at least 24 hours before asking again.
+
+### CLI Commands
+
+#### Fetch Documentation
+```bash
+uv run python amplify_cli.py fetch [--force]
+```
+- `--force`: Force refresh of existing documents
+
+#### Search Documentation
+```bash
+uv run python amplify_cli.py search "your query" [--category CATEGORY] [--limit N]
+```
+- `--category`: Filter by category (backend, frontend, etc.)
+- `--limit`: Maximum number of results (default: 10)
+
+#### List Categories
+```bash
+uv run python amplify_cli.py categories
+```
+
+#### Show Statistics
+```bash
+uv run python amplify_cli.py stats
+```
+
+#### Find Patterns
+```bash
+uv run python amplify_cli.py patterns TYPE
+```
+Where TYPE is one of: auth, api, storage, deployment, configuration, database, functions
+
+### CLI Examples
+
+```bash
+# Fetch all available documentation
+uv run python amplify_cli.py fetch
+
+# Force refresh all documents
+uv run python amplify_cli.py fetch --force
+
+# Fetch with markdown export
+uv run python amplify_cli.py fetch --save-markdown
+
+# Search for authentication docs
+uv run python amplify_cli.py search "cognito authentication" --category backend
+
+# Get full document content
+uv run python amplify_cli.py get-document "https://docs.amplify.aws/nextjs/..."
+
+# Show database statistics
+uv run python amplify_cli.py stats
+
+# Find auth patterns
+uv run python amplify_cli.py patterns auth
+
+# List all categories
+uv run python amplify_cli.py categories
+
+# Export all documents to markdown files
+uv run python amplify_cli.py export-markdown
+
+# Check version compatibility
+uv run python amplify_cli.py check-versions
+```
+
 ## Database
 
 The server uses SQLite to store documentation locally. The database file `amplify_docs.db` is created in the same directory as the server.
@@ -215,7 +333,23 @@ The server uses Python's logging module. Set the log level in the code:
 logging.basicConfig(level=logging.INFO)
 ```
 
+### Update Tracking
+
+The CLI tracks documentation updates in a `last_updated.json` file (automatically created on first use). This file contains:
+- `last_updated`: When documentation was last fetched
+- `last_prompted`: When the user was last asked about updates
+- `user_declined`: Whether the user declined the last update prompt
+
+This file is gitignored and local to each installation.
+
 ## Troubleshooting
+
+### Version Conflicts (ERESOLVE warnings)
+If you see npm warnings about peer dependencies after manual installation:
+- **Solution**: Use `npx create-amplify@latest --template nextjs` instead
+- These warnings indicate incompatible package versions
+- Manual installation of React/Next.js after `npx create-amplify` often causes conflicts
+- Both `npm create` and `npx` commands are equivalent
 
 ### Server Won't Start
 - Ensure all dependencies are installed: `uv sync`

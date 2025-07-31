@@ -26,6 +26,12 @@ from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from pydantic import AnyUrl
 
+# Import the documentation indexer
+try:
+    from doc_indexer import DocumentationIndexer
+except ImportError:
+    DocumentationIndexer = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("amplify-docs-server")
@@ -354,55 +360,108 @@ class AmplifyDocsDatabase:
             return False
     
     def search_documents(self, query: str, category: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        """Search documents by content and title."""
+        """Enhanced search with fuzzy matching and better relevance scoring."""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Split query into individual words for better matching
-            query_words = query.lower().split()
+            # Normalize query
+            query_lower = query.lower()
+            query_words = query_lower.split()
             
-            # Build SQL with multiple LIKE conditions
+            # Common synonyms and variations
+            synonyms = {
+                "auth": ["authentication", "auth", "signin", "signup", "login", "cognito"],
+                "api": ["api", "graphql", "rest", "endpoint", "query", "mutation"],
+                "ui": ["ui", "component", "frontend", "interface", "view"],
+                "storage": ["storage", "s3", "file", "upload", "download"],
+                "db": ["database", "data", "model", "schema", "dynamodb"],
+                "deploy": ["deploy", "deployment", "hosting", "publish"]
+            }
+            
+            # Expand query with synonyms
+            expanded_words = set(query_words)
+            for word in query_words:
+                for key, values in synonyms.items():
+                    if word in values or key == word:
+                        expanded_words.update(values)
+            
+            # Build SQL with scoring
             conditions = []
             params = []
             
+            # Create scoring SQL
+            score_cases = []
+            
+            # Exact match in title (highest score)
+            score_cases.append(f"WHEN LOWER(title) LIKE '%{query_lower}%' THEN 100")
+            
+            # Exact match in URL
+            score_cases.append(f"WHEN LOWER(url) LIKE '%{query_lower}%' THEN 80")
+            
+            # Word matches in title
             for word in query_words:
-                conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ?)")
-                params.extend([f"%{word}%", f"%{word}%"])
+                score_cases.append(f"WHEN LOWER(title) LIKE '%{word}%' THEN 50")
+            
+            # Expanded word matches
+            for word in expanded_words:
+                conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(url) LIKE ?)")
+                params.extend([f"%{word}%", f"%{word}%", f"%{word}%"])
+                score_cases.append(f"WHEN LOWER(title) LIKE '%{word}%' THEN 30")
+                score_cases.append(f"WHEN LOWER(content) LIKE '%{word}%' THEN 10")
+            
+            # Build the query
+            score_sql = "CASE " + " ".join(score_cases) + " ELSE 1 END"
             
             sql = f"""
-                SELECT url, title, content, markdown_content, category, last_scraped,
-                       (CASE 
-                          WHEN LOWER(title) LIKE ? THEN 10
-                          WHEN LOWER(url) LIKE ? THEN 8
-                          ELSE 0
-                       END) as relevance_score
+                SELECT DISTINCT url, title, content, markdown_content, category, last_scraped,
+                       ({score_sql}) as relevance_score
                 FROM documents 
                 WHERE {' OR '.join(conditions)}
             """
-            
-            # Add exact match scoring
-            params.extend([f"%{query.lower()}%", f"%{query.lower()}%"])
             
             if category:
                 sql += " AND category = ?"
                 params.append(category)
             
+            # Check if we have summaries table for better results
+            if self._table_exists('document_summaries'):
+                sql = f"""
+                    SELECT DISTINCT d.url, d.title, d.content, d.markdown_content, d.category, d.last_scraped,
+                           ({score_sql}) + 
+                           (CASE WHEN s.summary LIKE ? THEN 20 ELSE 0 END) as relevance_score
+                    FROM documents d
+                    LEFT JOIN document_summaries s ON d.url = s.url
+                    WHERE {' OR '.join(conditions)}
+                """
+                params.append(f"%{query_lower}%")
+                
+                if category:
+                    sql += " AND d.category = ?"
+                    params.append(category)
+            
             sql += " ORDER BY relevance_score DESC, last_scraped DESC LIMIT ?"
-            params.append(limit)
+            params.append(limit * 2)  # Get more results for filtering
             
             cursor.execute(sql, params)
             
+            # Process results and remove duplicates
+            seen_urls = set()
             results = []
+            
             for row in cursor.fetchall():
-                results.append({
-                    'url': row[0],
-                    'title': row[1],
-                    'content': row[2],
-                    'markdown_content': row[3],
-                    'category': row[4],
-                    'last_scraped': row[5]
-                })
+                url = row[0]
+                if url not in seen_urls and len(results) < limit:
+                    seen_urls.add(url)
+                    results.append({
+                        'url': url,
+                        'title': row[1],
+                        'content': row[2],
+                        'markdown_content': row[3],
+                        'category': row[4],
+                        'last_scraped': row[5],
+                        'relevance': row[6] if len(row) > 6 else 0
+                    })
             
             conn.close()
             return results
@@ -410,6 +469,21 @@ class AmplifyDocsDatabase:
         except Exception as e:
             logger.error(f"Error searching documents: {e}")
             return []
+    
+    def _table_exists(self, table_name: str) -> bool:
+        """Check if a table exists in the database."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name=?
+            """, (table_name,))
+            result = cursor.fetchone()
+            conn.close()
+            return result is not None
+        except:
+            return False
     
     def get_document_by_url(self, url: str) -> Optional[Dict[str, Any]]:
         """Get a specific document by URL."""
@@ -543,6 +617,21 @@ async def handle_list_tools() -> List[types.Tool]:
     """List available tools."""
     return [
         types.Tool(
+            name="getDocumentationOverview",
+            description="Get a comprehensive overview of all documentation with summaries and quick navigation",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "format": {
+                        "type": "string",
+                        "description": "Output format: 'full' for complete overview, 'summary' for brief overview",
+                        "enum": ["full", "summary"],
+                        "default": "summary"
+                    }
+                }
+            }
+        ),
+        types.Tool(
             name="searchDocs",
             description="Search through the indexed Amplify documentation",
             inputSchema={
@@ -618,6 +707,32 @@ async def handle_list_tools() -> List[types.Tool]:
                 "type": "object",
                 "properties": {}
             }
+        ),
+        types.Tool(
+            name="getQuickStartPatterns",
+            description="Get ready-to-use code patterns for common Amplify tasks",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task you want to accomplish",
+                        "enum": [
+                            "create-app",
+                            "add-auth",
+                            "add-api",
+                            "add-storage", 
+                            "file-upload",
+                            "user-profile",
+                            "real-time-data",
+                            "deploy-app",
+                            "custom-auth-ui",
+                            "data-relationships"
+                        ]
+                    }
+                },
+                "required": ["task"]
+            }
         )
     ]
 
@@ -625,7 +740,69 @@ async def handle_list_tools() -> List[types.Tool]:
 async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle tool execution."""
     
-    if name == "searchDocs":
+    if name == "getDocumentationOverview":
+        format_type = arguments.get("format", "summary")
+        
+        # Check if we have a cached index
+        index_file = Path("documentation_index.json")
+        
+        if not index_file.exists() and DocumentationIndexer:
+            # Generate index if it doesn't exist
+            indexer = DocumentationIndexer()
+            index = indexer.generate_index()
+            indexer.save_index()
+        elif not index_file.exists():
+            # Fallback if indexer not available
+            db = AmplifyDocsDatabase()
+            stats = db.get_stats()
+            
+            return [types.TextContent(
+                type="text",
+                text=f"""# Amplify Gen 2 Documentation Overview
+                
+Total Documents: {stats.get('total_documents', 0)}
+Last Updated: {stats.get('last_update', 'Unknown')}
+
+Categories:
+{chr(10).join(f"- {cat}: {count} documents" for cat, count in stats.get('categories', {}).items())}
+
+Use searchDocs to find specific topics or getDocument to retrieve full documentation."""
+            )]
+        
+        # Load the index
+        with open(index_file, 'r', encoding='utf-8') as f:
+            index = json.load(f)
+        
+        if format_type == "full":
+            # Return full detailed overview
+            return [types.TextContent(
+                type="text",
+                text=index["overview"]
+            )]
+        else:
+            # Return summary overview
+            summary = f"""# Amplify Gen 2 Documentation Summary
+
+## Quick Access Commands
+- Create new app: `npx create-amplify@latest --template nextjs`
+- Search docs: Use searchDocs tool with your query
+- Get patterns: Use findPatterns tool with pattern type
+
+## Main Categories
+"""
+            for cat_id, cat_data in index["categories"].items():
+                summary += f"\n**{cat_data['title']}** ({cat_data['doc_count']} docs)\n"
+                summary += f"{cat_data['summary'][:150]}...\n"
+            
+            summary += "\n## Common Patterns Available\n"
+            patterns = ["auth", "api", "storage", "data", "deployment"]
+            summary += "- " + "\n- ".join(patterns)
+            
+            summary += "\n\n💡 Use getDocumentationOverview with format='full' for detailed information."
+            
+            return [types.TextContent(type="text", text=summary)]
+    
+    elif name == "searchDocs":
         query = arguments["query"]
         category = arguments.get("category")
         limit = arguments.get("limit", 10)
@@ -773,6 +950,474 @@ npx create-amplify@latest --template nextjs
 This is documented as the ONLY reliable way to create a working Amplify Gen 2 + Next.js application.
 """
         return [types.TextContent(type="text", text=response_text)]
+    
+    elif name == "getQuickStartPatterns":
+        task = arguments["task"]
+        
+        patterns = {
+            "create-app": """# Create New Amplify Gen 2 + Next.js App
+
+```bash
+npx create-amplify@latest --template nextjs my-app
+cd my-app
+npm run dev
+```
+
+## Project Structure:
+```
+my-app/
+├── amplify/              # Backend configuration
+│   ├── auth/            # Authentication setup
+│   ├── data/            # Data models
+│   └── backend.ts       # Main backend config
+├── app/                 # Next.js App Router
+└── amplify_outputs.json # Generated config
+```""",
+
+            "add-auth": """# Add Authentication to Your App
+
+## 1. Backend Setup (amplify/auth/resource.ts):
+```typescript
+import { defineAuth } from '@aws-amplify/backend';
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true,
+  },
+  signUpAttributes: ['email', 'name'],
+});
+```
+
+## 2. Frontend - Use Authenticator Component:
+```tsx
+// app/page.tsx
+'use client';
+import { Authenticator } from '@aws-amplify/ui-react';
+import '@aws-amplify/ui-react/styles.css';
+
+export default function App() {
+  return (
+    <Authenticator>
+      {({ signOut, user }) => (
+        <main>
+          <h1>Hello {user?.username}</h1>
+          <button onClick={signOut}>Sign out</button>
+        </main>
+      )}
+    </Authenticator>
+  );
+}
+```
+
+## 3. Deploy:
+```bash
+npx ampx deploy
+```""",
+
+            "add-api": """# Add GraphQL API with Data Models
+
+## 1. Define Data Model (amplify/data/resource.ts):
+```typescript
+import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  Todo: a
+    .model({
+      content: a.string(),
+      isDone: a.boolean().default(false),
+    })
+    .authorization(allow => [allow.owner()]),
+});
+
+export type Schema = ClientSchema<typeof schema>;
+export const data = defineData({
+  schema,
+  authorizationModes: {
+    defaultAuthorizationMode: 'userPool',
+  },
+});
+```
+
+## 2. Use in Frontend:
+```tsx
+'use client';
+import { generateClient } from 'aws-amplify/data';
+import type { Schema } from '@/amplify/data/resource';
+
+const client = generateClient<Schema>();
+
+// Create
+await client.models.Todo.create({
+  content: 'Build an app',
+  isDone: false,
+});
+
+// Query
+const { data: todos } = await client.models.Todo.list();
+
+// Real-time subscription
+client.models.Todo.observeQuery().subscribe({
+  next: ({ items }) => console.log(items),
+});
+```""",
+
+            "add-storage": """# Add File Storage
+
+## 1. Backend Setup (amplify/storage/resource.ts):
+```typescript
+import { defineStorage } from '@aws-amplify/backend';
+
+export const storage = defineStorage({
+  name: 'myProjectFiles',
+  access: (allow) => ({
+    'profile-pictures/*': [
+      allow.authenticated.to(['read', 'write', 'delete']),
+      allow.guest.to(['read'])
+    ],
+    'public/*': [
+      allow.authenticated.to(['read', 'write']),
+      allow.guest.to(['read'])
+    ],
+  })
+});
+```
+
+## 2. Add to Backend (amplify/backend.ts):
+```typescript
+import { storage } from './storage/resource';
+
+export const backend = defineBackend({
+  auth,
+  data,
+  storage,
+});
+```
+
+## 3. Upload Files in Frontend:
+```tsx
+import { uploadData } from 'aws-amplify/storage';
+
+const file = event.target.files[0];
+try {
+  const result = await uploadData({
+    path: `public/${file.name}`,
+    data: file,
+    options: {
+      onProgress: ({ transferredBytes, totalBytes }) => {
+        const progress = (transferredBytes / totalBytes) * 100;
+        console.log(`Upload progress: ${progress}%`);
+      }
+    }
+  }).result;
+  console.log('Succeeded: ', result);
+} catch (error) {
+  console.log('Error : ', error);
+}
+```""",
+
+            "file-upload": """# File Upload with UI Component
+
+## Use FileUploader Component:
+```tsx
+'use client';
+import { FileUploader } from '@aws-amplify/ui-react';
+import '@aws-amplify/ui-react/styles.css';
+
+export default function FileUploadPage() {
+  return (
+    <FileUploader
+      acceptedFileTypes={['image/*', 'video/*']}
+      path="public/"
+      maxFileCount={3}
+      isResumable
+      onUploadSuccess={({ key }) => {
+        console.log('File uploaded:', key);
+      }}
+      onUploadError={(error, { key }) => {
+        console.error('Upload error:', error);
+      }}
+    />
+  );
+}
+```
+
+## Display Uploaded Images:
+```tsx
+import { StorageImage } from '@aws-amplify/ui-react';
+
+<StorageImage
+  alt="Profile picture"
+  path="public/profile-pic.jpg"
+  fallbackSrc="/placeholder.png"
+/>
+```""",
+
+            "user-profile": """# User Profile Management
+
+## Use AccountSettings Component:
+```tsx
+'use client';
+import { AccountSettings } from '@aws-amplify/ui-react';
+import '@aws-amplify/ui-react/styles.css';
+
+export default function ProfilePage() {
+  return (
+    <AccountSettings.ChangePassword />
+    <AccountSettings.DeleteUser />
+  );
+}
+```
+
+## Custom Profile with User Attributes:
+```tsx
+import { fetchUserAttributes, updateUserAttribute } from 'aws-amplify/auth';
+
+// Get user attributes
+const attributes = await fetchUserAttributes();
+console.log(attributes.email, attributes.name);
+
+// Update attribute
+await updateUserAttribute({
+  userAttribute: {
+    attributeKey: 'name',
+    value: 'New Name'
+  }
+});
+```""",
+
+            "real-time-data": """# Real-Time Data Synchronization
+
+## 1. Define Model with Subscriptions:
+```typescript
+const schema = a.schema({
+  Message: a
+    .model({
+      content: a.string().required(),
+      username: a.string().required(),
+      createdAt: a.datetime(),
+    })
+    .authorization(allow => [allow.publicApiKey()]),
+});
+```
+
+## 2. Real-Time Chat Component:
+```tsx
+'use client';
+import { useEffect, useState } from 'react';
+import { generateClient } from 'aws-amplify/data';
+
+const client = generateClient<Schema>();
+
+export default function Chat() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+
+  useEffect(() => {
+    // Subscribe to new messages
+    const subscription = client.models.Message.observeQuery({
+      sort: { createdAt: 'DESC' }
+    }).subscribe({
+      next: ({ items }) => setMessages(items),
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const sendMessage = async () => {
+    await client.models.Message.create({
+      content: input,
+      username: 'User',
+      createdAt: new Date().toISOString(),
+    });
+    setInput('');
+  };
+
+  return (
+    <div>
+      {messages.map(msg => (
+        <div key={msg.id}>
+          <strong>{msg.username}:</strong> {msg.content}
+        </div>
+      ))}
+      <input value={input} onChange={(e) => setInput(e.target.value)} />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+}
+```""",
+
+            "deploy-app": """# Deploy Your Amplify App
+
+## 1. Deploy Backend to AWS:
+```bash
+npx ampx deploy
+```
+
+## 2. Deploy to Amplify Hosting:
+
+### Option A: Git-based Deployment
+```bash
+# Push to GitHub
+git add .
+git commit -m "Initial commit"
+git push origin main
+
+# In AWS Console:
+# 1. Go to AWS Amplify
+# 2. Connect your GitHub repo
+# 3. Choose branch and deploy
+```
+
+### Option B: Manual Deployment
+```bash
+# Build the app
+npm run build
+
+# Deploy using Amplify CLI
+npx ampx hosting publish
+```
+
+## 3. Environment Variables:
+Add to Amplify Console:
+- `NEXT_PUBLIC_API_URL`
+- `DATABASE_URL`
+- Any other env vars
+
+## 4. Custom Domain:
+1. Go to Domain management in Amplify Console
+2. Add your domain
+3. Follow DNS configuration steps""",
+
+            "custom-auth-ui": """# Custom Authentication UI
+
+## Custom Sign In Form:
+```tsx
+'use client';
+import { signIn } from 'aws-amplify/auth';
+import { useState } from 'react';
+
+export default function CustomSignIn() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const { isSignedIn } = await signIn({
+        username: email,
+        password,
+      });
+      if (isSignedIn) {
+        window.location.href = '/dashboard';
+      }
+    } catch (error) {
+      console.error('Sign in error:', error);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSignIn}>
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="Email"
+        required
+      />
+      <input
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Password"
+        required
+      />
+      <button type="submit">Sign In</button>
+    </form>
+  );
+}
+```
+
+## Social Sign In:
+```tsx
+import { signInWithRedirect } from 'aws-amplify/auth';
+
+<button onClick={() => signInWithRedirect({ provider: 'Google' })}>
+  Sign in with Google
+</button>
+<button onClick={() => signInWithRedirect({ provider: 'Facebook' })}>
+  Sign in with Facebook
+</button>
+```""",
+
+            "data-relationships": """# Data Relationships
+
+## 1. Define Related Models:
+```typescript
+const schema = a.schema({
+  User: a
+    .model({
+      username: a.string().required(),
+      posts: a.hasMany('Post', 'userId'),
+    })
+    .authorization(allow => [allow.owner()]),
+    
+  Post: a
+    .model({
+      title: a.string().required(),
+      content: a.string(),
+      userId: a.id().required(),
+      user: a.belongsTo('User', 'userId'),
+      comments: a.hasMany('Comment', 'postId'),
+    })
+    .authorization(allow => [allow.owner()]),
+    
+  Comment: a
+    .model({
+      content: a.string().required(),
+      postId: a.id().required(),
+      post: a.belongsTo('Post', 'postId'),
+    })
+    .authorization(allow => [allow.authenticated().to(['read'])]),
+});
+```
+
+## 2. Query with Relationships:
+```tsx
+// Get user with posts
+const { data: user } = await client.models.User.get(
+  { id: userId },
+  { selectionSet: ['id', 'username', 'posts.*'] }
+);
+
+// Get post with user and comments
+const { data: post } = await client.models.Post.get(
+  { id: postId },
+  { 
+    selectionSet: [
+      'id', 
+      'title', 
+      'content',
+      'user.username',
+      'comments.*'
+    ] 
+  }
+);
+
+// Create related data
+const post = await client.models.Post.create({
+  title: 'My Post',
+  content: 'Content',
+  userId: currentUser.id,
+});
+```"""
+        }
+        
+        pattern = patterns.get(task, "Pattern not found")
+        
+        return [types.TextContent(
+            type="text",
+            text=f"{pattern}\n\n💡 **Next Steps:**\nUse `searchDocs` for more details on any specific topic mentioned above."
+        )]
     
     else:
         return [types.TextContent(

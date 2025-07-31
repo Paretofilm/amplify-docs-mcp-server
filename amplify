@@ -1,0 +1,5 @@
+#!/bin/bash
+# Wrapper script for amplify_cli.py that cleans environment
+
+unset VIRTUAL_ENV
+uv run python "$(dirname "$0")/amplify_cli.py" "$@"
