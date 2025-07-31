@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime
@@ -22,6 +23,7 @@ import mcp.server.stdio
 import mcp.types as types
 from bs4 import BeautifulSoup
 from mcp.server import NotificationOptions, Server
+from mcp.server.models import InitializationOptions
 from pydantic import AnyUrl
 
 # Configure logging
@@ -231,6 +233,92 @@ class AmplifyDocsScraper:
                 logger.error(f"Error discovering URLs from {current_url}: {e}")
         
         return list(discovered_urls)
+    
+    def save_markdown_file(self, doc_data: Dict[str, Any], output_dir: Path):
+        """Save a document as a markdown file."""
+        try:
+            # Create a safe filename from the URL
+            url_path = urlparse(doc_data['url']).path
+            # Remove leading/trailing slashes and replace remaining with underscores
+            filename = url_path.strip('/').replace('/', '_')
+            if not filename:
+                filename = 'index'
+            filename = f"{filename}.md"
+            
+            # Create category subdirectory
+            category_dir = output_dir / doc_data['category']
+            category_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write the markdown file
+            file_path = category_dir / filename
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # Write metadata header
+                f.write(f"---\n")
+                f.write(f"title: {doc_data['title']}\n")
+                f.write(f"url: {doc_data['url']}\n")
+                f.write(f"category: {doc_data['category']}\n")
+                f.write(f"last_scraped: {doc_data.get('last_scraped', datetime.now().isoformat())}\n")
+                f.write(f"---\n\n")
+                
+                # Write content
+                f.write(f"# {doc_data['title']}\n\n")
+                f.write(f"Source: [{doc_data['url']}]({doc_data['url']})\n\n")
+                f.write(doc_data['markdown_content'])
+            
+            logger.info(f"Saved markdown file: {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving markdown file for {doc_data['url']}: {e}")
+            return False
+    
+    async def scrape_docs(self, force_refresh=False, save_markdown=False, markdown_dir="amplify_docs_markdown"):
+        """Scrape all documentation pages."""
+        db = AmplifyDocsDatabase()
+        
+        # Check if we need to scrape
+        if not force_refresh:
+            stats = db.get_stats()
+            if stats.get('total_documents', 0) > 0:
+                logger.info(f"Documentation already indexed ({stats['total_documents']} documents). Use force_refresh=True to re-scrape.")
+                return
+        
+        # Set up markdown output directory if requested
+        output_dir = None
+        if save_markdown:
+            output_dir = Path(markdown_dir)
+            output_dir.mkdir(exist_ok=True)
+            logger.info(f"Markdown files will be saved to: {output_dir}")
+        
+        scraped_count = 0
+        errors = 0
+        
+        # Discover URLs
+        discovered_urls = await self.discover_urls(self.base_url, max_depth=3)
+        
+        logger.info(f"Found {len(discovered_urls)} URLs to scrape")
+        
+        # Scrape each URL
+        for i, url in enumerate(discovered_urls, 1):
+            logger.info(f"Scraping {i}/{len(discovered_urls)}: {url}")
+            doc_data = await self.fetch_page(url)
+            if doc_data:
+                if db.save_document(doc_data):
+                    scraped_count += 1
+                    # Save as markdown if requested
+                    if save_markdown and output_dir:
+                        self.save_markdown_file(doc_data, output_dir)
+                else:
+                    errors += 1
+            else:
+                errors += 1
+            
+            # Small delay to be respectful
+            await asyncio.sleep(0.5)
+        
+        logger.info(f"Scraping completed! Processed {scraped_count} documents successfully, {errors} errors.")
+        if save_markdown:
+            logger.info(f"Markdown files saved to: {output_dir}")
 
 class AmplifyDocsDatabase:
     """Handles database operations for the documentation."""
@@ -271,18 +359,36 @@ class AmplifyDocsDatabase:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            sql = """
-                SELECT url, title, content, markdown_content, category, last_scraped
+            # Split query into individual words for better matching
+            query_words = query.lower().split()
+            
+            # Build SQL with multiple LIKE conditions
+            conditions = []
+            params = []
+            
+            for word in query_words:
+                conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ?)")
+                params.extend([f"%{word}%", f"%{word}%"])
+            
+            sql = f"""
+                SELECT url, title, content, markdown_content, category, last_scraped,
+                       (CASE 
+                          WHEN LOWER(title) LIKE ? THEN 10
+                          WHEN LOWER(url) LIKE ? THEN 8
+                          ELSE 0
+                       END) as relevance_score
                 FROM documents 
-                WHERE (title LIKE ? OR content LIKE ?)
+                WHERE {' OR '.join(conditions)}
             """
-            params = [f"%{query}%", f"%{query}%"]
+            
+            # Add exact match scoring
+            params.extend([f"%{query.lower()}%", f"%{query.lower()}%"])
             
             if category:
                 sql += " AND category = ?"
                 params.append(category)
             
-            sql += " ORDER BY last_scraped DESC LIMIT ?"
+            sql += " ORDER BY relevance_score DESC, last_scraped DESC LIMIT ?"
             params.append(limit)
             
             cursor.execute(sql, params)
@@ -383,36 +489,59 @@ class AmplifyDocsDatabase:
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
             return {}
+    
+    def get_all_documents(self) -> List[Dict[str, Any]]:
+        """Get all documents from the database."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT url, title, content, markdown_content, category, last_scraped
+                FROM documents
+                ORDER BY category, title
+            """)
+            
+            documents = []
+            for row in cursor.fetchall():
+                documents.append(dict(row))
+            
+            conn.close()
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error getting all documents: {e}")
+            return []
+
+def get_version_compatibility():
+    """Get Amplify Gen 2 and Next.js version compatibility information."""
+    return {
+        "amplify_gen2": {
+            "latest": "@aws-amplify/backend@latest",
+            "compatible_nextjs": ["14.x", "15.x"],
+            "supports": ["App Router", "Pages Router"],
+            "typescript": "5.0+ (recommended)"
+        },
+        "nextjs": {
+            "recommended": "14.x or 15.x",
+            "minimum": "14.0.0",
+            "notes": "Both App Router and Pages Router are supported"
+        },
+        "CRITICAL_COMMAND": "npx create-amplify@latest --template nextjs",
+        "WARNING": "NEVER create Amplify + Next.js apps without the --template nextjs flag!"
+    }
 
 # Initialize database
 init_database()
 
 # Create server
-server = Server("amplify-docs-mcp-server")
+server = Server("amplify-gen-2-nextjs-docs")
 
 @server.list_tools()
 async def handle_list_tools() -> List[types.Tool]:
     """List available tools."""
     return [
-        types.Tool(
-            name="fetchLatestDocs",
-            description="Scrape and index the latest AWS Amplify Gen 2 documentation from docs.amplify.aws/nextjs/",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "max_pages": {
-                        "type": "integer",
-                        "description": "Maximum number of pages to scrape (default: 100)",
-                        "default": 100
-                    },
-                    "force_refresh": {
-                        "type": "boolean",
-                        "description": "Force re-scraping even if documents exist (default: false)",
-                        "default": False
-                    }
-                }
-            }
-        ),
         types.Tool(
             name="searchDocs",
             description="Search through the indexed Amplify documentation",
@@ -481,6 +610,14 @@ async def handle_list_tools() -> List[types.Tool]:
                 },
                 "required": ["pattern_type"]
             }
+        ),
+        types.Tool(
+            name="getCreateCommand",
+            description="Get the CORRECT command for creating a new Amplify Gen 2 + Next.js application",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
         )
     ]
 
@@ -488,46 +625,7 @@ async def handle_list_tools() -> List[types.Tool]:
 async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle tool execution."""
     
-    if name == "fetchLatestDocs":
-        max_pages = arguments.get("max_pages", 100)
-        force_refresh = arguments.get("force_refresh", False)
-        
-        db = AmplifyDocsDatabase()
-        
-        # Check if we need to scrape
-        if not force_refresh:
-            stats = db.get_stats()
-            if stats.get('total_documents', 0) > 0:
-                return [types.TextContent(
-                    type="text",
-                    text=f"Documentation already indexed ({stats['total_documents']} documents). Use force_refresh=true to re-scrape."
-                )]
-        
-        scraped_count = 0
-        errors = 0
-        
-        async with AmplifyDocsScraper() as scraper:
-            # Discover URLs
-            discovered_urls = await scraper.discover_urls(scraper.base_url, max_depth=2)
-            discovered_urls = discovered_urls[:max_pages]  # Limit pages
-            
-            # Scrape each URL
-            for url in discovered_urls:
-                doc_data = await scraper.fetch_page(url)
-                if doc_data:
-                    if db.save_document(doc_data):
-                        scraped_count += 1
-                    else:
-                        errors += 1
-                else:
-                    errors += 1
-        
-        return [types.TextContent(
-            type="text",
-            text=f"Scraping completed! Processed {scraped_count} documents successfully, {errors} errors."
-        )]
-    
-    elif name == "searchDocs":
+    if name == "searchDocs":
         query = arguments["query"]
         category = arguments.get("category")
         limit = arguments.get("limit", 10)
@@ -598,13 +696,13 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
         
         # Define search queries for different patterns
         pattern_queries = {
-            "auth": "authentication signIn signUp cognito user",
-            "api": "graphql rest api endpoint mutation query",
-            "storage": "s3 storage upload download file",
-            "deployment": "deploy hosting amplify build",
-            "configuration": "configure amplify_outputs.json setup",
-            "database": "dynamodb database table data",
-            "functions": "lambda function serverless backend"
+            "auth": "authentication signIn signUp cognito user authenticator",
+            "api": "graphql rest api endpoint mutation query data model",
+            "storage": "s3 storage upload download file fileuploader storageimage",
+            "deployment": "deploy hosting amplify build npx",
+            "configuration": "configure amplify_outputs.json setup backend",
+            "database": "dynamodb database table data model schema",
+            "functions": "lambda function serverless backend handler"
         }
         
         query = pattern_queries.get(pattern_type, pattern_type)
@@ -646,6 +744,36 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
         
         return [types.TextContent(type="text", text=response_text)]
     
+    elif name == "getCreateCommand":
+        response_text = """
+# CRITICAL: Creating Amplify Gen 2 + Next.js Application
+
+## The ONLY correct command:
+
+```bash
+npx create-amplify@latest --template nextjs
+```
+
+## ⚠️ WARNING:
+- NEVER use `npm create amplify@latest` without the template flag
+- NEVER manually install Next.js after running create-amplify
+- ALWAYS include `--template nextjs`
+
+## Why this matters:
+1. Without `--template nextjs`, you get an incomplete setup
+2. Manual package installation causes version conflicts
+3. Only the template ensures compatible versions
+
+## For AI Assistants:
+When asked to create an Amplify app with Next.js, ALWAYS respond with:
+```bash
+npx create-amplify@latest --template nextjs
+```
+
+This is documented as the ONLY reliable way to create a working Amplify Gen 2 + Next.js application.
+"""
+        return [types.TextContent(type="text", text=response_text)]
+    
     else:
         return [types.TextContent(
             type="text",
@@ -659,8 +787,8 @@ async def main():
         await server.run(
             read_stream,
             write_stream,
-            mcp.server.stdio.InitializationOptions(
-                server_name="amplify-docs-mcp-server",
+            InitializationOptions(
+                server_name="amplify-gen-2-nextjs-docs",
                 server_version="1.0.0",
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),

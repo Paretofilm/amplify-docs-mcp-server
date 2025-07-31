@@ -56,3 +56,9 @@ htmlcov/
 
 # Don't ignore the test database for the example
 !quick_test_fetch.py
+
+# Update tracking
+last_updated.json
+
+# Exported markdown documentation
+amplify_docs_markdown/
