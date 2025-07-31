@@ -371,13 +371,67 @@ class AmplifyDocsDatabase:
             
             # Common synonyms and variations
             synonyms = {
-                "auth": ["authentication", "auth", "signin", "signup", "login", "cognito"],
+                "auth": ["authentication", "auth", "signin", "signup", "login", "cognito", "authenticator"],
                 "api": ["api", "graphql", "rest", "endpoint", "query", "mutation"],
                 "ui": ["ui", "component", "frontend", "interface", "view"],
-                "storage": ["storage", "s3", "file", "upload", "download"],
+                "storage": ["storage", "s3", "file", "upload", "download", "fileuploader"],
                 "db": ["database", "data", "model", "schema", "dynamodb"],
-                "deploy": ["deploy", "deployment", "hosting", "publish"]
+                "deploy": ["deploy", "deployment", "hosting", "publish", "amplify"]
             }
+            
+            # Add common typos/variations
+            typo_fixes = {
+                "authentcation": "authentication",
+                "authentiction": "authentication", 
+                "authenitcation": "authentication",
+                "storag": "storage",
+                "graphq": "graphql",
+                "deply": "deploy",
+                "uplod": "upload",
+                "dowload": "download"
+            }
+            
+            # Fix typos in query words
+            corrected_words = []
+            for word in query_words:
+                corrected_words.append(typo_fixes.get(word, word))
+            
+            # Use corrected words if any typos were fixed
+            if corrected_words != query_words:
+                query_words = corrected_words
+            
+            # Handle empty query
+            if not query_words:
+                # Return all documents for empty query
+                sql = """
+                    SELECT url, title, content, markdown_content, category, last_scraped, 1 as relevance_score
+                    FROM documents
+                """
+                params = []
+                
+                if category:
+                    sql += " WHERE category = ?"
+                    params.append(category)
+                    
+                sql += " ORDER BY last_scraped DESC LIMIT ?"
+                params.append(limit)
+                
+                cursor.execute(sql, params)
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append({
+                        'url': row[0],
+                        'title': row[1],
+                        'content': row[2],
+                        'markdown_content': row[3],
+                        'category': row[4],
+                        'last_scraped': row[5],
+                        'relevance': row[6]
+                    })
+                
+                conn.close()
+                return results
             
             # Expand query with synonyms
             expanded_words = set(query_words)
@@ -394,35 +448,23 @@ class AmplifyDocsDatabase:
             score_cases = []
             
             # Exact match in title (highest score)
-            score_cases.append(f"WHEN LOWER(title) LIKE '%{query_lower}%' THEN 100")
-            
-            # Exact match in URL
-            score_cases.append(f"WHEN LOWER(url) LIKE '%{query_lower}%' THEN 80")
+            if query_lower:
+                score_cases.append(f"WHEN LOWER(d.title) LIKE '%{query_lower}%' THEN 100")
+                score_cases.append(f"WHEN LOWER(d.url) LIKE '%{query_lower}%' THEN 80")
             
             # Word matches in title
             for word in query_words:
-                score_cases.append(f"WHEN LOWER(title) LIKE '%{word}%' THEN 50")
+                score_cases.append(f"WHEN LOWER(d.title) LIKE '%{word}%' THEN 50")
             
             # Expanded word matches
             for word in expanded_words:
-                conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(url) LIKE ?)")
+                conditions.append("(LOWER(d.title) LIKE ? OR LOWER(d.content) LIKE ? OR LOWER(d.url) LIKE ?)")
                 params.extend([f"%{word}%", f"%{word}%", f"%{word}%"])
-                score_cases.append(f"WHEN LOWER(title) LIKE '%{word}%' THEN 30")
-                score_cases.append(f"WHEN LOWER(content) LIKE '%{word}%' THEN 10")
+                score_cases.append(f"WHEN LOWER(d.title) LIKE '%{word}%' THEN 30")
+                score_cases.append(f"WHEN LOWER(d.content) LIKE '%{word}%' THEN 10")
             
             # Build the query
             score_sql = "CASE " + " ".join(score_cases) + " ELSE 1 END"
-            
-            sql = f"""
-                SELECT DISTINCT url, title, content, markdown_content, category, last_scraped,
-                       ({score_sql}) as relevance_score
-                FROM documents 
-                WHERE {' OR '.join(conditions)}
-            """
-            
-            if category:
-                sql += " AND category = ?"
-                params.append(category)
             
             # Check if we have summaries table for better results
             if self._table_exists('document_summaries'):
@@ -435,6 +477,18 @@ class AmplifyDocsDatabase:
                     WHERE {' OR '.join(conditions)}
                 """
                 params.append(f"%{query_lower}%")
+                
+                if category:
+                    sql += " AND d.category = ?"
+                    params.append(category)
+            else:
+                # Simple query without join - need to use table alias
+                sql = f"""
+                    SELECT DISTINCT d.url, d.title, d.content, d.markdown_content, d.category, d.last_scraped,
+                           ({score_sql}) as relevance_score
+                    FROM documents d
+                    WHERE {' OR '.join(conditions)}
+                """
                 
                 if category:
                     sql += " AND d.category = ?"
