@@ -1399,7 +1399,8 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
         
         # Validate category if provided
         if category:
-            valid_categories = ["api-data", "authentication", "backend", "deployment", "frontend", "general", "getting-started", "reference", "storage", "troubleshooting"]
+            # Get actual categories from database dynamically
+            valid_categories = db.list_categories()
             if category not in valid_categories:
                 return [types.TextContent(
                     type="text",
@@ -1510,10 +1511,45 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
             "workflow": "sandbox development git workflow pipeline local testing amplify sandbox"
         }
         
-        query = pattern_queries.get(pattern_type, pattern_type)
-        
         db = AmplifyDocsDatabase()
-        results = db.search_documents(query, limit=5)
+        
+        # Add logging for debugging
+        logger.info(f"findPatterns called with pattern_type: {pattern_type}")
+        
+        # Apply specific filtering based on pattern type
+        if pattern_type == "api":
+            # For API patterns, exclude storage results
+            query = pattern_queries.get(pattern_type)
+            results = db.search_documents(query, limit=10)
+            # Filter out storage documents
+            original_count = len(results)
+            results = [r for r in results if r['category'] != 'storage' and 'storage' not in r['url'].lower()]
+            results = results[:5]  # Limit to 5 after filtering
+            logger.info(f"API pattern search: {original_count} results before filtering, {len(results)} after filtering out storage")
+            
+        elif pattern_type == "data":
+            # For data patterns, focus on api-data category and backend
+            query = pattern_queries.get(pattern_type)
+            # First try api-data category
+            results = db.search_documents(query, category="api-data", limit=5)
+            if len(results) < 3:
+                # If not enough results, also search in backend category
+                backend_results = db.search_documents(query, category="backend", limit=5)
+                results.extend(backend_results)
+                results = results[:5]  # Limit total to 5
+            logger.info(f"Data pattern search: found {len(results)} results in api-data/backend categories")
+            
+        elif pattern_type == "storage":
+            # For storage, search specifically in storage category
+            query = pattern_queries.get(pattern_type)
+            results = db.search_documents(query, category="storage", limit=5)
+            logger.info(f"Storage pattern search: found {len(results)} results in storage category")
+            
+        else:
+            # Default behavior for other patterns
+            query = pattern_queries.get(pattern_type, pattern_type)
+            results = db.search_documents(query, limit=5)
+            logger.info(f"Pattern search for '{pattern_type}': found {len(results)} results")
         
         if not results:
             return [types.TextContent(
