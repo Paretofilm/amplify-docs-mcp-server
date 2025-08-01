@@ -1,9 +1,18 @@
-# AWS Amplify Documentation MCP Server
+# AWS Amplify Gen 2 Documentation MCP Server
 
-An MCP (Model Context Provider) server that provides tools for scraping, indexing, and searching AWS Amplify Gen 2 documentation. This server enables Claude Code, Claude Desktop, and other MCP clients to easily access and search through Amplify documentation patterns and examples.
+An MCP (Model Context Provider) server that provides comprehensive access to AWS Amplify Gen 2 Next.js documentation, enabling AI assistants to provide accurate, up-to-date guidance on building applications with Amplify.
 
-**MCP Python SDK Documentation
-This server is buil based on the MCP Python SDK documentation found here: https://github.com/modelcontextprotocol/python-sdk
+## Key Features
+
+- **Accurate Category Search**: All 10 documentation categories are searchable (api-data, authentication, backend, deployment, frontend, general, getting-started, reference, storage, troubleshooting)
+- **Enhanced Amplify Data Search**: Specialized search optimization for Amplify's primary data solution (defineData, a.model, real-time subscriptions)
+- **Correct Pattern Matching**: API patterns return REST/HTTP API content, while Data patterns return Amplify Data content
+- **CRUD Form Generation**: Complete documentation for Amplify's automatic form generation feature
+- **Clear Architecture Understanding**: Distinguishes between core services (Auth, Data, Storage) and additional AWS services
+- **Helpful Error Messages**: Invalid categories show available options instead of generic errors
+
+**MCP Python SDK Documentation**  
+This server is built based on the MCP Python SDK documentation found here: https://github.com/modelcontextprotocol/python-sdk
 
 
 ## Features
@@ -131,13 +140,16 @@ Search through the indexed Amplify documentation.
 - `limit` (integer, optional): Maximum number of results (default: 10)
 
 **Categories:**
-- getting-started
-- backend
-- frontend
-- deployment
-- reference
-- guides
-- general
+- api-data - Data layer and API documentation
+- authentication - User authentication and authorization
+- backend - Backend configuration and services
+- deployment - Deployment and hosting
+- frontend - Frontend components and UI
+- general - General concepts and overview
+- getting-started - Quickstart guides
+- reference - API reference documentation
+- storage - File storage and management
+- troubleshooting - Common issues and solutions
 
 **Example:**
 ```
@@ -178,13 +190,18 @@ Find common Amplify Gen 2 patterns and examples.
 - `pattern_type` (string, required): Type of pattern to find
 
 **Pattern Types:**
-- auth
-- api
-- storage
-- deployment
-- configuration
-- database
-- functions
+- auth - Authentication patterns (Cognito integration)
+- data - Amplify Data patterns (defineData, a.model, real-time)
+- api - REST/HTTP API patterns (API Gateway, custom endpoints)
+- storage - File operations (S3 integration)
+- deployment - CI/CD patterns
+- configuration - amplify/backend.ts patterns
+- database - Advanced DynamoDB patterns
+- functions - Lambda functions
+- ui - UI building patterns (CRUD forms, components)
+- ssr - Server-side rendering patterns
+- typescript - TypeScript-first patterns
+- workflow - Development workflows
 
 **Example:**
 ```
@@ -206,16 +223,17 @@ Get ready-to-use code patterns for common Amplify tasks.
 - `task` (string, required): The task you want to accomplish
 
 **Available Tasks:**
-- create-app
-- add-auth
-- add-api
-- add-storage
-- file-upload
-- user-profile
-- real-time-data
-- deploy-app
-- custom-auth-ui
-- data-relationships
+- create-app - Create new Amplify + Next.js application
+- add-auth - Add authentication to your app
+- add-api - Add GraphQL API with data models
+- add-storage - Configure file storage
+- file-upload - Implement file upload functionality
+- crud-forms - Generate automatic CRUD forms from data models
+- user-profile - User profile management
+- real-time-data - Real-time data synchronization
+- deploy-app - Deploy your application
+- custom-auth-ui - Custom authentication UI
+- data-relationships - Data relationships and queries
 
 **Example:**
 ```

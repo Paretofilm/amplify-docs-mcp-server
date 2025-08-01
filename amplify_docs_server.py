@@ -369,14 +369,19 @@ class AmplifyDocsDatabase:
             query_lower = query.lower()
             query_words = query_lower.split()
             
-            # Common synonyms and variations
+            # Common synonyms and variations - updated for Amplify Gen 2
             synonyms = {
                 "auth": ["authentication", "auth", "signin", "signup", "login", "cognito", "authenticator"],
-                "api": ["api", "graphql", "rest", "endpoint", "query", "mutation"],
-                "ui": ["ui", "component", "frontend", "interface", "view"],
-                "storage": ["storage", "s3", "file", "upload", "download", "fileuploader"],
-                "db": ["database", "data", "model", "schema", "dynamodb"],
-                "deploy": ["deploy", "deployment", "hosting", "publish", "amplify"]
+                "api": ["api", "rest", "http", "endpoint", "apigateway", "custom"],
+                "data": ["data", "defineData", "model", "schema", "real-time", "subscription", "generateClient", "observeQuery"],
+                "graphql": ["graphql", "query", "mutation", "subscription"],
+                "ui": ["ui", "component", "frontend", "interface", "view", "crud", "form", "authenticator", "fileuploader"],
+                "storage": ["storage", "s3", "file", "upload", "download", "fileuploader", "uploadData", "downloadData"],
+                "db": ["database", "dynamodb", "table", "defineData", "model", "schema"],
+                "deploy": ["deploy", "deployment", "hosting", "publish", "amplify", "sandbox", "npx"],
+                "definedata": ["defineData", "data", "model", "schema", "backend"],
+                "realtime": ["real-time", "realtime", "subscription", "observeQuery", "live"],
+                "typescript": ["typescript", "types", "type-safe", "generateClient"]
             }
             
             # Add common typos/variations
@@ -451,6 +456,12 @@ class AmplifyDocsDatabase:
             if query_lower:
                 score_cases.append(f"WHEN LOWER(d.title) LIKE '%{query_lower}%' THEN 100")
                 score_cases.append(f"WHEN LOWER(d.url) LIKE '%{query_lower}%' THEN 80")
+            
+            # Special scoring for Amplify Data queries
+            if any(term in query_lower for term in ['definedata', 'a.model', 'schema', 'real-time', 'generateclient']):
+                score_cases.append(f"WHEN d.category = 'api-data' THEN 90")
+                score_cases.append(f"WHEN LOWER(d.url) LIKE '%/data/%' THEN 85")
+                score_cases.append(f"WHEN LOWER(d.title) LIKE '%data%' THEN 75")
             
             # Word matches in title
             for word in query_words:
@@ -698,7 +709,7 @@ async def handle_list_tools() -> List[types.Tool]:
                     "category": {
                         "type": "string",
                         "description": "Filter by category (optional)",
-                        "enum": ["getting-started", "backend", "frontend", "deployment", "reference", "guides", "general"]
+                        "enum": ["api-data", "authentication", "backend", "deployment", "frontend", "general", "getting-started", "reference", "storage", "troubleshooting"]
                     },
                     "limit": {
                         "type": "integer",
@@ -748,7 +759,7 @@ async def handle_list_tools() -> List[types.Tool]:
                     "pattern_type": {
                         "type": "string",
                         "description": "Type of pattern to find",
-                        "enum": ["auth", "api", "storage", "deployment", "configuration", "database", "functions"]
+                        "enum": ["auth", "data", "api", "storage", "deployment", "configuration", "database", "functions", "ui", "ssr", "typescript", "workflow"]
                     }
                 },
                 "required": ["pattern_type"]
@@ -777,6 +788,7 @@ async def handle_list_tools() -> List[types.Tool]:
                             "add-api",
                             "add-storage", 
                             "file-upload",
+                            "crud-forms",
                             "user-profile",
                             "real-time-data",
                             "deploy-app",
@@ -862,6 +874,20 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
         limit = arguments.get("limit", 10)
         
         db = AmplifyDocsDatabase()
+        
+        # Validate category if provided
+        if category:
+            valid_categories = ["api-data", "authentication", "backend", "deployment", "frontend", "general", "getting-started", "reference", "storage", "troubleshooting"]
+            if category not in valid_categories:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Invalid category '{category}'. Valid categories are:\n" + 
+                         "\n".join(f"- {cat}" for cat in sorted(valid_categories)) +
+                         f"\n\nSearching without category filter for '{query}'..."
+                )]
+                # Continue search without category filter
+                category = None
+        
         results = db.search_documents(query, category, limit)
         
         if not results:
@@ -925,15 +951,41 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
     elif name == "findPatterns":
         pattern_type = arguments["pattern_type"]
         
-        # Define search queries for different patterns
+        # Define search queries for different patterns - aligned with Amplify Gen 2 architecture
         pattern_queries = {
-            "auth": "authentication signIn signUp cognito user authenticator",
-            "api": "graphql rest api endpoint mutation query data model",
-            "storage": "s3 storage upload download file fileuploader storageimage",
-            "deployment": "deploy hosting amplify build npx",
-            "configuration": "configure amplify_outputs.json setup backend",
-            "database": "dynamodb database table data model schema",
-            "functions": "lambda function serverless backend handler"
+            # Authentication patterns (Cognito integration)
+            "auth": "authentication signIn signUp cognito user authenticator multi-factor social providers",
+            
+            # REST/HTTP API patterns (API Gateway) - NOT the primary data solution
+            "api": "rest api gateway http endpoint custom lambda apigateway authorization headers",
+            
+            # File operations (S3 integration)
+            "storage": "s3 storage upload download file fileuploader storageimage uploadData downloadData",
+            
+            # CI/CD patterns
+            "deployment": "deploy hosting amplify sandbox git npx pipeline build",
+            
+            # amplify/backend.ts patterns
+            "configuration": "configure amplify_outputs.json defineBackend backend.ts setup",
+            
+            # Amplify Data patterns (the PRIMARY data solution)
+            "data": "defineData model schema real-time subscription generateClient observeQuery authorization",
+            "database": "defineData model schema dynamodb table data real-time subscription",
+            
+            # Lambda functions
+            "functions": "lambda function serverless backend handler custom business logic",
+            
+            # UI building patterns (including CRUD forms)
+            "ui": "ui component library crud form generation formbuilder authenticator fileuploader storageimage",
+            
+            # Server-side rendering patterns
+            "ssr": "server-side rendering nextjs ssr ssg static generation getServerSideProps",
+            
+            # TypeScript-first patterns
+            "typescript": "typescript types generateClient type-safe schema typing interfaces",
+            
+            # Development workflows
+            "workflow": "sandbox development git workflow pipeline local testing amplify sandbox"
         }
         
         query = pattern_queries.get(pattern_type, pattern_type)
@@ -1206,6 +1258,118 @@ import { StorageImage } from '@aws-amplify/ui-react';
 />
 ```""",
 
+            "crud-forms": """# CRUD Form Generation
+## Automatic Form Generation from Data Models
+
+Amplify Gen 2 provides Connected Forms that automatically generate CRUD interfaces from your data models.
+
+## 1. Install Amplify UI:
+```bash
+npm install @aws-amplify/ui-react
+```
+
+## 2. Generate Forms from Schema:
+```tsx
+// app/admin/products/page.tsx
+'use client';
+import { FormBuilder } from '@aws-amplify/ui-react';
+import { generateClient } from 'aws-amplify/data';
+import type { Schema } from '@/amplify/data/resource';
+
+const client = generateClient<Schema>();
+
+export default function ProductAdmin() {
+  return (
+    <div>
+      <h1>Product Management</h1>
+      
+      {/* Auto-generated Create Form */}
+      <FormBuilder.Product.CreateForm
+        onSuccess={(product) => {
+          console.log('Product created:', product);
+        }}
+      />
+      
+      {/* Auto-generated Update Form */}
+      <FormBuilder.Product.UpdateForm
+        product={existingProduct}
+        onSuccess={(product) => {
+          console.log('Product updated:', product);
+        }}
+      />
+    </div>
+  );
+}
+```
+
+## 3. Customize Generated Forms:
+```tsx
+<FormBuilder.Product.CreateForm
+  fields={{
+    name: {
+      label: 'Product Name',
+      placeholder: 'Enter product name',
+      required: true,
+    },
+    price: {
+      label: 'Price (USD)',
+      type: 'number',
+      min: 0,
+      step: 0.01,
+    },
+    category: {
+      label: 'Category',
+      type: 'select',
+      options: ['Electronics', 'Clothing', 'Food'],
+    },
+  }}
+  onValidate={{
+    price: (value) => {
+      if (value < 0) return 'Price must be positive';
+      return null;
+    },
+  }}
+/>
+```
+
+## 4. List View with Actions:
+```tsx
+import { Collection, Card, Button } from '@aws-amplify/ui-react';
+
+export function ProductList() {
+  const { data: products } = await client.models.Product.list();
+  
+  return (
+    <Collection
+      items={products}
+      type="list"
+      direction="column"
+      gap="20px"
+    >
+      {(product, index) => (
+        <Card key={index}>
+          <h3>{product.name}</h3>
+          <p>${product.price}</p>
+          <Button onClick={() => editProduct(product)}>
+            Edit
+          </Button>
+          <Button onClick={() => deleteProduct(product.id)}>
+            Delete
+          </Button>
+        </Card>
+      )}
+    </Collection>
+  );
+}
+```
+
+## 5. Advanced Form Features:
+- **File Uploads**: Integrate with Storage
+- **Relationships**: Handle nested data
+- **Validation**: Custom business rules
+- **Conditional Fields**: Show/hide based on values
+
+Note: CRUD form generation is a core Amplify Gen 2 feature that significantly reduces boilerplate code for admin interfaces and data management screens.""",
             "user-profile": """# User Profile Management
 
 ## Use AccountSettings Component:
