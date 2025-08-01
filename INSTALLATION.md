@@ -8,6 +8,17 @@ This MCP server provides AWS Amplify Gen 2 documentation access for Claude Deskt
 - uv (Python package manager): `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - Claude Desktop and/or Claude Code installed
 
+## Dependencies
+
+All Python dependencies are managed automatically through `pyproject.toml` (similar to `package.json` in Node.js). The project uses:
+- `mcp` - Model Context Protocol SDK
+- `aiohttp` - Async HTTP client for web scraping
+- `beautifulsoup4` - HTML parsing
+- `pydantic` - Data validation
+- `lxml` - XML/HTML processing
+
+You don't need to install these manually - `uv sync` handles everything!
+
 ## Step 1: Clone the Repository
 
 ```bash
@@ -20,17 +31,23 @@ git clone https://github.com/your-username/amplify-gen-2-nextjs-docs.git
 cd amplify-gen-2-nextjs-docs
 ```
 
-## Step 2: Set Up Python Environment
+## Step 2: Install Dependencies
 
 ```bash
-# Create virtual environment and install dependencies
-uv venv
+# Install all dependencies automatically (like npm install)
 uv sync
+
+# This single command:
+# - Creates a virtual environment if needed
+# - Reads dependencies from pyproject.toml
+# - Installs all required packages (mcp, aiohttp, beautifulsoup4, etc.)
 
 # Initialize the documentation database (one-time setup)
 uv run python amplify_docs_server.py
 # Press Ctrl+C after it starts successfully
 ```
+
+> **Note**: No manual package installation needed! The `uv sync` command works like `npm install` in Node.js projects - it reads all dependencies from `pyproject.toml` and installs them automatically.
 
 ## Step 3: Create Wrapper Script
 
@@ -166,6 +183,14 @@ The server comes with pre-indexed documentation. To update:
 
 ```bash
 cd ~/mcp-servers/amplify-gen-2-nextjs-docs
+
+# Pull latest changes (if any)
+git pull
+
+# Update dependencies (if any changed)
+uv sync
+
+# Re-scrape documentation
 uv run python -c "
 from amplify_docs_server import AmplifyDocsScraper, AmplifyDocsDatabase
 import asyncio

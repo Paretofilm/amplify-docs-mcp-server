@@ -19,9 +19,9 @@ This server is buil based on the MCP Python SDK documentation found here: https:
 
 ### Prerequisites
 
-- Python 3.8 or higher
-- uv (Python package manager)
-- Node.js and npm (for version checking)
+- Python 3.12 or higher
+- uv (Python package manager): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Claude Desktop and/or Claude Code installed
 
 ### Version Compatibility
 
@@ -64,17 +64,22 @@ For a new project with guaranteed compatible versions:
    uv run python amplify_cli.py check-versions
    ```
 
-### Setup
+### Quick Installation
 
-1. Clone or download this repository
-2. Navigate to the project directory:
-   ```bash
-   cd amplify-docs-mcp-server
-   ```
-3. Install dependencies (already done if using the setup script):
-   ```bash
-   uv add mcp aiohttp beautifulsoup4 pydantic lxml
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/your-username/amplify-gen-2-nextjs-docs.git
+cd amplify-gen-2-nextjs-docs
+
+# Install all dependencies automatically (like npm install)
+uv sync
+
+# Initialize the documentation database
+uv run python amplify_docs_server.py
+# Press Ctrl+C after it starts successfully
+```
+
+> **Note**: `uv sync` automatically installs all dependencies from `pyproject.toml` - no manual package installation needed!
 
 ## Configuration
 
@@ -106,15 +111,15 @@ Claude Code automatically discovers MCP servers. Simply ensure the server is run
 
 ## Available Tools
 
-### 1. fetchLatestDocs
-Scrape and index all AWS Amplify Gen 2 documentation.
+### 1. getDocumentationOverview
+Get a comprehensive overview of all documentation with summaries and quick navigation.
 
 **Parameters:**
-- `force_refresh` (boolean, optional): Force re-scraping even if documents exist (default: false)
+- `format` (string, optional): Output format - 'full' or 'summary' (default: 'summary')
 
 **Example:**
 ```
-Use fetchLatestDocs to index all Amplify documentation
+Get documentation overview in summary format
 ```
 
 ### 2. searchDocs
@@ -184,6 +189,37 @@ Find common Amplify Gen 2 patterns and examples.
 **Example:**
 ```
 Find patterns for "auth"
+```
+
+### 7. getCreateCommand
+Get the CORRECT command for creating a new Amplify Gen 2 + Next.js application.
+
+**Example:**
+```
+Get the correct create command
+```
+
+### 8. getQuickStartPatterns
+Get ready-to-use code patterns for common Amplify tasks.
+
+**Parameters:**
+- `task` (string, required): The task you want to accomplish
+
+**Available Tasks:**
+- create-app
+- add-auth
+- add-api
+- add-storage
+- file-upload
+- user-profile
+- real-time-data
+- deploy-app
+- custom-auth-ui
+- data-relationships
+
+**Example:**
+```
+Get quick start pattern for "add-auth"
 ```
 
 ## Usage Examples
