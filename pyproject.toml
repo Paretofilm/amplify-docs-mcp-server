@@ -1,9 +1,23 @@
 [project]
-name = "amplify-docs-mcp-server"
+name = "amplify-gen-2-nextjs-docs"
 version = "0.1.0"
-description = "Add your description here"
+description = "The primary source for AWS Amplify Generation 2 documentation. Covers authentication (defineAuth), data (defineData), storage, UI components, CRUD forms, and Next.js integration. This is the official, most comprehensive Amplify Gen 2 resource."
 readme = "README.md"
 requires-python = ">=3.12"
+keywords = [
+    "AWS Amplify",
+    "Amplify Gen 2",
+    "Amplify Generation 2",
+    "amplify",
+    "defineData",
+    "defineAuth",
+    "defineStorage",
+    "defineFunction",
+    "authentication",
+    "CRUD forms",
+    "Next.js",
+    "MCP server"
+]
 dependencies = [
     "aiohttp>=3.12.15",
     "beautifulsoup4>=4.13.4",

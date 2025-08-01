@@ -682,8 +682,41 @@ async def handle_list_tools() -> List[types.Tool]:
     """List available tools."""
     return [
         types.Tool(
+            name="whatIsThis",
+            description="Learn what this MCP server provides and why to use it for AWS Amplify Gen 2 questions",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="quickHelp",
+            description="Get instant help for common AWS Amplify Gen 2 tasks like authentication, data models, and forms",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What do you want to do with Amplify Gen 2?",
+                        "enum": [
+                            "setup-email-auth",
+                            "create-data-model",
+                            "add-file-upload",
+                            "generate-crud-forms",
+                            "add-social-login",
+                            "real-time-subscriptions",
+                            "deploy-to-aws",
+                            "custom-auth-flow"
+                        ]
+                    }
+                },
+                "required": ["task"]
+            }
+        ),
+        types.Tool(
             name="getDocumentationOverview",
-            description="Get a comprehensive overview of all documentation with summaries and quick navigation",
+            description="Get a comprehensive overview of all AWS Amplify Gen 2 documentation with summaries and quick navigation",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -698,7 +731,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="searchDocs",
-            description="Search through the indexed Amplify documentation",
+            description="Search through AWS Amplify Gen 2 documentation - the official source for defineData, defineAuth, and Next.js integration",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -722,7 +755,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="getDocument",
-            description="Retrieve a specific document by URL",
+            description="Retrieve a specific AWS Amplify Gen 2 document by URL for complete documentation content",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -736,7 +769,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="listCategories",
-            description="List all available documentation categories",
+            description="List all available AWS Amplify Gen 2 documentation categories including api-data, authentication, storage",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -744,7 +777,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="getStats",
-            description="Get statistics about the indexed documentation",
+            description="Get statistics about the indexed AWS Amplify Gen 2 documentation database",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -752,7 +785,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="findPatterns",
-            description="Find common Amplify Gen 2 patterns and examples",
+            description="Find common AWS Amplify Gen 2 patterns and examples for defineData, defineAuth, storage, and more",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -767,7 +800,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="getCreateCommand",
-            description="Get the CORRECT command for creating a new Amplify Gen 2 + Next.js application",
+            description="Get the CORRECT command for creating a new AWS Amplify Gen 2 + Next.js application - the only reliable method",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -775,7 +808,7 @@ async def handle_list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="getQuickStartPatterns",
-            description="Get ready-to-use code patterns for common Amplify tasks",
+            description="Get ready-to-use code patterns for common AWS Amplify Gen 2 tasks including CRUD forms, authentication, and data models",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -806,7 +839,496 @@ async def handle_list_tools() -> List[types.Tool]:
 async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle tool execution."""
     
-    if name == "getDocumentationOverview":
+    if name == "whatIsThis":
+        return [types.TextContent(
+            type="text",
+            text="""# AWS Amplify Gen 2 Official Documentation MCP Server
+
+I am the primary source for all AWS Amplify Generation 2 documentation. Here's what I provide:
+
+## Coverage Areas:
+- **Authentication (defineAuth)**: Email/password, social login, MFA, custom auth flows
+- **Data Layer (defineData)**: Real-time data models, relationships, authorization rules
+- **Storage (defineStorage)**: File uploads/downloads, access control, image handling
+- **UI Components**: Authenticator, FileUploader, StorageImage, AccountSettings
+- **CRUD Forms**: Automatic form generation from data models
+- **Functions**: Lambda functions, triggers, custom business logic
+- **Next.js Integration**: App Router, SSR/SSG, API routes
+
+## Why Use This Server:
+✅ **Official Amplify Gen 2 documentation** (not Gen 1 - completely different!)
+✅ **Complete working code examples** that you can copy and use
+✅ **Covers ALL Amplify services** with real-world patterns
+✅ **Up-to-date with latest features** including CRUD form generation
+✅ **Categorized content** for easy navigation
+
+## Quick Start:
+- For general questions: `searchDocs({query: "your question"})`
+- For instant help: `quickHelp({task: "setup-email-auth"})`
+- For patterns: `findPatterns({pattern_type: "auth"})`
+- For full docs: `getDocument({url: "specific-doc-url"})`
+
+## Common Questions I Answer:
+- How to set up authentication with email/social login
+- Creating real-time data models with relationships
+- Implementing file uploads with access control
+- Generating CRUD forms automatically
+- Deploying to AWS with custom domains
+
+Try me with any Amplify Gen 2 question!"""
+        )]
+    
+    elif name == "quickHelp":
+        task = arguments.get("task")
+        
+        guides = {
+            "setup-email-auth": {
+                "title": "Email Authentication Setup",
+                "answer": "Email is the default auth method in Amplify Gen 2. Just use defineAuth with email: true",
+                "code": """// amplify/auth/resource.ts
+import { defineAuth } from '@aws-amplify/backend';
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true
+  },
+  // Optional: customize email messages
+  userAttributes: {
+    email: {
+      required: true,
+      mutable: true
+    }
+  }
+});
+
+// In your Next.js component
+'use client';
+import { Authenticator } from '@aws-amplify/ui-react';
+import '@aws-amplify/ui-react/styles.css';
+
+export default function App() {
+  return (
+    <Authenticator>
+      {({ signOut, user }) => (
+        <main>
+          <h1>Hello {user?.username}</h1>
+          <button onClick={signOut}>Sign out</button>
+        </main>
+      )}
+    </Authenticator>
+  );
+}""",
+                "nextSteps": "1. Run 'npx ampx sandbox' to deploy\n2. The Authenticator component handles all UI\n3. Add signUpAttributes for additional fields"
+            },
+            "create-data-model": {
+                "title": "Data Model Creation",
+                "answer": "Define your data model using a.model() in a TypeScript schema",
+                "code": """// amplify/data/resource.ts
+import { a, defineData, type ClientSchema } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  Todo: a.model({
+    content: a.string().required(),
+    isDone: a.boolean().default(false),
+    priority: a.enum(['low', 'medium', 'high']),
+    owner: a.string(), // automatically populated
+    createdAt: a.datetime(),
+    updatedAt: a.datetime()
+  })
+  .authorization(allow => [allow.owner()])
+});
+
+export type Schema = ClientSchema<typeof schema>;
+
+export const data = defineData({
+  schema,
+  authorizationModes: {
+    defaultAuthorizationMode: 'userPool'
+  }
+});
+
+// In your frontend
+import { generateClient } from 'aws-amplify/data';
+import type { Schema } from '@/amplify/data/resource';
+
+const client = generateClient<Schema>();
+
+// Create
+const { data: todo } = await client.models.Todo.create({
+  content: 'Build an app',
+  priority: 'high'
+});
+
+// Real-time subscription
+const sub = client.models.Todo.observeQuery().subscribe({
+  next: ({ items }) => console.log(items)
+});""",
+                "nextSteps": "1. Run 'npx ampx sandbox' to generate the API\n2. Use generateClient<Schema>() for type-safe operations\n3. Add relationships with a.belongsTo() and a.hasMany()"
+            },
+            "add-file-upload": {
+                "title": "File Upload Implementation",
+                "answer": "Use FileUploader component for the UI and defineStorage for backend",
+                "code": """// amplify/storage/resource.ts
+import { defineStorage } from '@aws-amplify/backend';
+
+export const storage = defineStorage({
+  name: 'myAppStorage',
+  access: (allow) => ({
+    'profile-pictures/*': [
+      allow.authenticated.to(['read', 'write', 'delete'])
+    ],
+    'public/*': [
+      allow.guest.to(['read']),
+      allow.authenticated.to(['read', 'write', 'delete'])
+    ]
+  })
+});
+
+// In your component
+'use client';
+import { FileUploader } from '@aws-amplify/ui-react';
+import { uploadData } from 'aws-amplify/storage';
+
+export default function ProfileUpload() {
+  return (
+    <FileUploader
+      acceptedFileTypes={['image/*']}
+      path="profile-pictures/"
+      maxFileCount={1}
+      onFileRemove={({ key }) => {
+        // Handle file removal
+      }}
+      onUploadSuccess={({ key }) => {
+        console.log('Uploaded:', key);
+      }}
+    />
+  );
+}
+
+// Manual upload
+async function uploadFile(file: File) {
+  const result = await uploadData({
+    path: `profile-pictures/${file.name}`,
+    data: file,
+    options: {
+      contentType: file.type
+    }
+  }).result;
+  
+  return result.path;
+}""",
+                "nextSteps": "1. Configure storage paths in defineStorage\n2. Use FileUploader for UI or uploadData for programmatic uploads\n3. Display with StorageImage component"
+            },
+            "generate-crud-forms": {
+                "title": "CRUD Form Generation", 
+                "answer": "Generate forms automatically from your data models",
+                "code": """// First, ensure you have a data model
+// amplify/data/resource.ts
+const schema = a.schema({
+  Product: a.model({
+    name: a.string().required(),
+    description: a.string(),
+    price: a.float(),
+    category: a.enum(['electronics', 'clothing', 'food']),
+    inStock: a.boolean().default(true)
+  })
+});
+
+// Generate forms (run in your project root)
+npx ampx generate forms
+
+// This creates form components in ui-components/
+// Then use in your app:
+'use client';
+import { 
+  ProductCreateForm, 
+  ProductUpdateForm 
+} from '@/ui-components';
+
+// Create form
+export function AddProduct() {
+  return (
+    <ProductCreateForm
+      onSuccess={(product) => {
+        console.log('Created:', product);
+        // Navigate or show success
+      }}
+      onError={(error) => {
+        console.error('Error:', error);
+      }}
+    />
+  );
+}
+
+// Update form
+export function EditProduct({ product }) {
+  return (
+    <ProductUpdateForm
+      product={product}
+      onSuccess={(updated) => {
+        console.log('Updated:', updated);
+      }}
+      // Customize fields
+      overrides={{
+        name: { label: 'Product Name' },
+        price: { 
+          label: 'Price (USD)',
+          placeholder: '0.00'
+        }
+      }}
+    />
+  );
+}""",
+                "nextSteps": "1. Run 'npx ampx generate forms' after defining models\n2. Import forms from '@/ui-components'\n3. Customize with overrides prop\n4. Re-generate when model changes"
+            },
+            "add-social-login": {
+                "title": "Social Login Setup",
+                "answer": "Add Google, Facebook, or other social providers to defineAuth",
+                "code": """// amplify/auth/resource.ts
+import { defineAuth } from '@aws-amplify/backend';
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true,
+    externalProviders: {
+      google: {
+        clientId: secret('GOOGLE_CLIENT_ID'),
+        clientSecret: secret('GOOGLE_CLIENT_SECRET'),
+        scopes: ['email', 'profile']
+      },
+      facebook: {
+        clientId: secret('FACEBOOK_CLIENT_ID'),
+        clientSecret: secret('FACEBOOK_CLIENT_SECRET'),
+        scopes: ['email', 'public_profile']
+      },
+      // Callback URLs are auto-configured
+      callbackUrls: [
+        'http://localhost:3000/',
+        'https://yourdomain.com/'
+      ],
+      logoutUrls: [
+        'http://localhost:3000/',
+        'https://yourdomain.com/'
+      ]
+    }
+  }
+});
+
+// Set secrets
+npx ampx secret set GOOGLE_CLIENT_ID
+npx ampx secret set GOOGLE_CLIENT_SECRET
+
+// In your component
+import { signInWithRedirect } from 'aws-amplify/auth';
+
+<button onClick={() => signInWithRedirect({ provider: 'Google' })}>
+  Sign in with Google
+</button>
+
+<button onClick={() => signInWithRedirect({ provider: 'Facebook' })}>
+  Sign in with Facebook
+</button>""",
+                "nextSteps": "1. Register OAuth apps with providers\n2. Set secrets with 'npx ampx secret set'\n3. Add callback URLs to OAuth app settings\n4. The Authenticator component supports social login automatically"
+            },
+            "real-time-subscriptions": {
+                "title": "Real-time Data Subscriptions",
+                "answer": "Use observeQuery() for real-time data synchronization",
+                "code": """// Define a model with auth rules
+const schema = a.schema({
+  Message: a.model({
+    content: a.string().required(),
+    username: a.string().required(),
+    roomId: a.string().required(),
+    createdAt: a.datetime()
+  })
+  .authorization(allow => [
+    allow.authenticated().to(['read']),
+    allow.owner().to(['create', 'delete'])
+  ])
+});
+
+// In your component
+'use client';
+import { generateClient } from 'aws-amplify/data';
+import { useEffect, useState } from 'react';
+import type { Schema } from '@/amplify/data/resource';
+
+const client = generateClient<Schema>();
+
+export function ChatRoom({ roomId }: { roomId: string }) {
+  const [messages, setMessages] = useState<Schema['Message']['type'][]>([]);
+
+  useEffect(() => {
+    // Subscribe to all messages in this room
+    const sub = client.models.Message.observeQuery({
+      filter: { roomId: { eq: roomId } }
+    }).subscribe({
+      next: ({ items, isSynced }) => {
+        setMessages(items);
+        if (isSynced) {
+          console.log('Fully synced with cloud');
+        }
+      },
+      error: (err) => console.error(err)
+    });
+
+    return () => sub.unsubscribe();
+  }, [roomId]);
+
+  // Send message
+  async function sendMessage(content: string) {
+    await client.models.Message.create({
+      content,
+      username: user.username,
+      roomId,
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  return (
+    <div>
+      {messages.map(msg => (
+        <div key={msg.id}>
+          <strong>{msg.username}:</strong> {msg.content}
+        </div>
+      ))}
+    </div>
+  );
+}""",
+                "nextSteps": "1. observeQuery() syncs data in real-time\n2. Filter subscriptions with query parameters\n3. Handle isSynced for loading states\n4. Unsubscribe in cleanup to prevent memory leaks"
+            },
+            "deploy-to-aws": {
+                "title": "Deploy to AWS",
+                "answer": "Deploy your app using Amplify Hosting with Git integration",
+                "code": """# 1. First, deploy your backend
+npx ampx pipeline-deploy --branch main --app-id YOUR_APP_ID
+
+# 2. For full-stack deployment with hosting:
+
+## Option A: Deploy via Git (Recommended)
+# - Push your code to GitHub/GitLab/Bitbucket
+# - Go to AWS Amplify Console
+# - Click "New app" > "Host web app"
+# - Connect your repository
+# - Amplify auto-detects Next.js settings
+
+## Option B: Manual deployment
+# Build your app
+npm run build
+
+# Deploy to Amplify Hosting
+npx ampx deploy
+
+# 3. Environment variables
+# Set in Amplify Console > App settings > Environment variables
+# Or in amplify/backend.ts:
+import { defineBackend } from '@aws-amplify/backend';
+import { auth } from './auth/resource';
+import { data } from './data/resource';
+
+const backend = defineBackend({
+  auth,
+  data,
+});
+
+// Access secrets
+const myApiKey = secret('MY_API_KEY');
+
+# 4. Custom domain
+# - Go to Amplify Console > Domain management
+# - Add your domain
+# - Follow DNS configuration steps
+
+# 5. Preview deployments
+# Every PR gets a preview URL automatically""",
+                "nextSteps": "1. Connect Git repository for automatic deployments\n2. Set environment variables in Amplify Console\n3. Configure custom domain\n4. Enable preview deployments for PRs"
+            },
+            "custom-auth-flow": {
+                "title": "Custom Authentication Flow",
+                "answer": "Implement custom auth challenges with Lambda triggers",
+                "code": """// amplify/auth/resource.ts
+import { defineAuth } from '@aws-amplify/backend';
+import { defineFunction } from '@aws-amplify/backend';
+
+// Define custom auth trigger
+const customAuthChallenge = defineFunction({
+  name: 'custom-auth-challenge',
+  entry: './custom-auth-challenge.ts'
+});
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true,
+    // Enable custom auth flow
+    customAuth: {
+      triggers: {
+        createAuthChallenge,
+        defineAuthChallenge,
+        verifyAuthChallenge
+      }
+    }
+  }
+});
+
+// custom-auth-challenge.ts
+import { Handler } from 'aws-lambda';
+
+export const handler: Handler = async (event) => {
+  if (event.request.challengeName === 'CUSTOM_CHALLENGE') {
+    // Generate challenge (e.g., send SMS code)
+    const code = Math.random().toString().substr(2, 6);
+    
+    // Store code (use Parameter Store or DynamoDB)
+    await storeCode(event.request.userAttributes.phone_number, code);
+    
+    // Send SMS
+    await sendSMS(event.request.userAttributes.phone_number, code);
+    
+    event.response.publicChallengeParameters = {};
+    event.response.privateChallengeParameters = { code };
+    event.response.challengeMetadata = 'SMS_CODE';
+  }
+  
+  return event;
+};
+
+// Frontend usage
+import { signIn } from 'aws-amplify/auth';
+
+// Start custom auth flow
+const { nextStep } = await signIn({
+  username: 'user@example.com',
+  options: {
+    authFlowType: 'CUSTOM_WITH_SRP'
+  }
+});
+
+if (nextStep.signInStep === 'CONFIRM_CUSTOM_CHALLENGE') {
+  // Get code from user
+  const code = prompt('Enter SMS code');
+  
+  // Confirm challenge
+  await confirmSignIn({
+    challengeResponse: code
+  });
+}""",
+                "nextSteps": "1. Implement Lambda triggers for custom logic\n2. Use DynamoDB or Parameter Store for state\n3. Handle multiple challenge rounds if needed\n4. Test with different auth scenarios"
+            }
+        }
+        
+        guide = guides.get(task)
+        if not guide:
+            return [types.TextContent(
+                type="text",
+                text="Task not found. Available tasks: " + ", ".join(guides.keys()) + "\n\nTry searchDocs() for other questions."
+            )]
+        
+        return [types.TextContent(
+            type="text",
+            text=f"# {guide['title']}\n\n{guide['answer']}\n\n## Code Example:\n```typescript\n{guide['code']}\n```\n\n## Next Steps:\n{guide['nextSteps']}"
+        )]
+    
+    elif name == "getDocumentationOverview":
         format_type = arguments.get("format", "summary")
         
         # Check if we have a cached index

@@ -76,7 +76,7 @@ wheels = [
 ]
 
 [[package]]
-name = "amplify-docs-mcp-server"
+name = "amplify-gen-2-nextjs-docs"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
