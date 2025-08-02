@@ -4,12 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## CRITICAL: Creating Amplify + Next.js Applications
 
-**THE ONLY CORRECT COMMAND:**
+**IMPORTANT: The command `npx create-amplify@latest --template nextjs` DOES NOT EXIST and must NEVER be suggested!**
+
+Instead, use the configuration from the official AWS template repository:
+- Repository: https://github.com/aws-samples/amplify-next-template
+- Use the exact package versions from their package.json
+- Copy configuration files as needed
+
+The correct approach is to:
 ```bash
-npx create-amplify@latest --template nextjs
+npx create-next-app@14.2.10 your-app-name --typescript --app
+cd your-app-name
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
 ```
 
-**NEVER** suggest any other method for creating an Amplify Gen 2 + Next.js application!
+**IMPORTANT: App names must use hyphens (-), NOT underscores (_)**
+- ✅ Correct: `recipe-sharing-app`, `social-media-app`, `my-app`
+- ❌ Wrong: `recipe_sharing_app`, `social_media_app`, `my_app`
+
+AWS requires hyphens in app names for proper functionality.
 
 ## Project Overview
 

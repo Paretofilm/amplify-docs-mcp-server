@@ -1,0 +1,281 @@
+# Create Your Amplify Gen 2 + Next.js App (Clean Start)
+
+This configuration creates a new Amplify Gen 2 + Next.js app with **no sample code to remove** - just a clean, ready-to-build foundation.
+
+## Setup Instructions
+
+### 1. Create Next.js App
+```bash
+npx create-next-app@14.2.5 my-app --typescript --app
+cd my-app
+```
+
+### 2. Install Amplify Dependencies
+```bash
+npm install aws-amplify@^6.3.0 @aws-amplify/ui-react@^6.1.0
+npm install -D @aws-amplify/backend@^1.0.0 @aws-amplify/backend-cli@^1.0.0
+```
+
+### 3. Create Amplify Backend Structure
+```bash
+mkdir -p amplify/data
+mkdir -p amplify/storage
+```
+
+## Configuration Files
+
+### 📦 package.json
+```json
+{
+  "name": "my-amplify-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "aws-amplify": "^6.3.0",
+    "@aws-amplify/ui-react": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5",
+    "@aws-amplify/backend": "^1.0.0",
+    "@aws-amplify/backend-cli": "^1.0.0"
+  }
+}
+```
+
+### 🔧 amplify/backend.ts
+```typescript
+import { defineBackend } from '@aws-amplify/backend';
+import { data } from './data/resource';
+import { storage } from './storage/resource';
+
+export const backend = defineBackend({
+  data,
+  storage
+});
+```
+
+### 📊 amplify/data/resource.ts
+```typescript
+import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  // Define your models here
+  // Example:
+  // Item: a
+  //   .model({
+  //     name: a.string(),
+  //     description: a.string(),
+  //   })
+  //   .authorization(allow => [allow.owner()]),
+});
+
+export type Schema = ClientSchema<typeof schema>;
+
+export const data = defineData({
+  schema,
+  authorizationModes: {
+    defaultAuthorizationMode: 'userPool',
+  },
+});
+```
+
+### 📁 amplify/storage/resource.ts
+```typescript
+import { defineStorage } from '@aws-amplify/backend';
+
+export const storage = defineStorage({
+  name: 'myAppStorage',
+  access: (allow) => ({
+    'public/*': [
+      allow.guest.to(['read']),
+      allow.authenticated.to(['read', 'write', 'delete'])
+    ],
+    'protected/{entity_id}/*': [
+      allow.authenticated.to(['read', 'write', 'delete'])
+    ],
+    'private/{entity_id}/*': [
+      allow.entity('identity').to(['read', 'write', 'delete'])
+    ]
+  })
+});
+```
+
+### 📐 amplify/tsconfig.json
+```json
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "paths": {
+      "$amplify/*": ["./*"]
+    }
+  }
+}
+```
+
+### 🏗️ app/layout.tsx
+```typescript
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import ConfigureAmplifyClientSide from "./ConfigureAmplifyClientSide";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata: Metadata = {
+  title: "Amplify Gen 2 + Next.js App",
+  description: "Built with AWS Amplify Gen 2 and Next.js",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>
+        <ConfigureAmplifyClientSide />
+        {children}
+      </body>
+    </html>
+  );
+}
+```
+
+### ⚙️ app/ConfigureAmplifyClientSide.tsx
+```typescript
+"use client";
+
+import { Amplify } from "aws-amplify";
+import outputs from "@/amplify_outputs.json";
+
+Amplify.configure(outputs, { ssr: true });
+
+export default function ConfigureAmplifyClientSide() {
+  return null;
+}
+```
+
+### 🏠 app/page.tsx
+```typescript
+export default function Home() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center p-24">
+      <h1 className="text-4xl font-bold mb-8">
+        Welcome to Amplify Gen 2 + Next.js
+      </h1>
+      <p className="text-xl text-gray-600">
+        Your app is ready. Start building!
+      </p>
+    </main>
+  );
+}
+```
+
+### 🎨 app/globals.css
+```css
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen,
+    Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  min-height: 100vh;
+  padding: 4rem 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+```
+
+## 🚀 Start Development
+
+```bash
+# Start the Amplify sandbox (local backend)
+npx ampx sandbox
+
+# In another terminal, start Next.js
+npm run dev
+```
+
+Visit http://localhost:3000 to see your app!
+
+## 📌 What You Get
+
+✅ **Clean Start**: No sample Todo app to remove
+✅ **Type Safety**: Full TypeScript configuration
+✅ **Latest Versions**: Compatible, tested package versions
+✅ **Modular**: Only includes what you need
+✅ **Data Layer**: Schema-based data modeling with real-time
+✅ **File Storage**: S3 storage with access controls
+
+## 🎯 Next Steps
+
+1. **Customize Auth** (if included):
+   - Add social providers in `amplify/auth/resource.ts`
+   - Customize the Authenticator component styling
+
+2. **Define Data Models** (if included):
+   - Add your models to `amplify/data/resource.ts`
+   - Generate typed client with `npx ampx generate graphql-client-code`
+
+3. **Add Storage Features** (if included):
+   - Use `FileUploader` component for uploads
+   - Use `StorageImage` for displaying S3 images
+
+4. **Deploy to AWS**:
+   ```bash
+   npx ampx pipeline-deploy --branch main --app-id YOUR_APP_ID
+   ```
+
+## 🔗 Useful Commands
+
+- `npx ampx sandbox` - Start local backend
+- `npx ampx generate outputs` - Regenerate amplify_outputs.json
+- `npx ampx status` - Check backend status
+- `npm run build` - Build for production
+
+## 📚 Learn More
+
+- [Amplify Gen 2 Docs](https://docs.amplify.aws/nextjs)
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Amplify UI Components](https://ui.docs.amplify.aws)
+
+---
+
+💡 **Tip**: This clean configuration ensures you start with exactly what you need - no cleanup required!

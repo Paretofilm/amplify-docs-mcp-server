@@ -32,9 +32,247 @@ try:
 except ImportError:
     DocumentationIndexer = None
 
+# Import project detection utilities
+try:
+    from project_detection import (
+        should_provide_project_setup,
+        detect_required_features,
+        extract_project_name,
+        extract_project_description,
+        generate_project_setup_response
+    )
+except ImportError:
+    logger.warning("project_detection module not found, some features may be limited")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("amplify-docs-server")
+
+# Search enhancement functions
+def detect_query_intent(query: str) -> str:
+    """Detect the intent behind a search query to provide better results."""
+    query_lower = query.lower()
+    
+    # Setup/initialization intent
+    if any(term in query_lower for term in ['create', 'start', 'new', 'init', 'setup', 'begin', 'template', 'clone']):
+        return 'setup'
+    
+    # Authorization/security intent
+    if any(term in query_lower for term in ['auth', 'owner', 'allow', 'permission', 'access', 'security', 'authenticated', 'identityClaim']):
+        return 'auth'
+    
+    # Data modeling intent
+    if any(term in query_lower for term in ['model', 'schema', 'data', 'field', 'type', 'relationship', 'hasMany', 'belongsTo']):
+        return 'data'
+    
+    # Error/troubleshooting intent
+    if any(term in query_lower for term in ['error', 'issue', 'problem', 'fail', 'not working', 'undefined', 'mistake']):
+        return 'error'
+    
+    # Timestamp/date handling
+    if any(term in query_lower for term in ['timestamp', 'createdAt', 'updatedAt', 'date', 'time']):
+        return 'timestamps'
+    
+    # Import/module intent
+    if any(term in query_lower for term in ['import', 'require', 'module', '.js', 'extension', 'typescript']):
+        return 'imports'
+    
+    return 'general'
+
+def expand_query_terms(query: str, intent: str) -> List[str]:
+    """Expand query terms based on intent to find more relevant results."""
+    expanded = [query]
+    query_lower = query.lower()
+    
+    # Intent-specific expansions
+    expansions = {
+        'setup': {
+            'create': ['setup', 'initialize', 'new project', 'getting started', 'npx create-next-app'],
+            'template': ['DO NOT clone', 'npx create-next-app', 'setup', 'initialization'],
+            'clone': ['DO NOT clone template', 'use npx create-next-app instead', 'setup correctly']
+        },
+        'auth': {
+            'owner': ['authorization', 'ownership', 'allow.owner()', 'NOT ownerField'],
+            'authenticated': ['allow.authenticated()', 'authorization rules', 'auth patterns'],
+            'identityClaim': ['INCORRECT syntax', 'use allow.owner() instead', 'authorization']
+        },
+        'data': {
+            'model': ['defineData', 'schema', 'data modeling', 'relationships'],
+            'timestamp': ['automatic timestamps', 'createdAt updatedAt automatic', 'DO NOT add manually']
+        },
+        'timestamps': {
+            'createdAt': ['automatic fields', 'DO NOT add manually', 'handled by Amplify'],
+            'updatedAt': ['automatic fields', 'DO NOT add manually', 'handled by Amplify']
+        },
+        'imports': {
+            '.js': ['TypeScript imports', 'DO NOT use .js extension', 'import paths'],
+            'import': ['module imports', 'TypeScript', 'correct import syntax']
+        }
+    }
+    
+    # Add expansions based on detected terms
+    for term, expansion_list in expansions.get(intent, {}).items():
+        if term in query_lower:
+            expanded.extend(expansion_list)
+    
+    # Always add common mistake indicators
+    if 'error' in intent or 'mistake' in query_lower:
+        expanded.extend(['common mistakes', 'pitfalls', 'troubleshooting', 'correct way'])
+    
+    return list(set(expanded))  # Remove duplicates
+
+def detect_anti_patterns(query: str) -> Dict[str, str]:
+    """Detect common anti-patterns in queries and provide corrections."""
+    anti_patterns = {
+        # Template confusion
+        r'clone.*template|git clone.*amplify': {
+            'issue': 'Cloning GitHub template',
+            'correction': 'Use npx create-next-app@14.2.10 instead of cloning',
+            'severity': 'high'
+        },
+        # Authorization mistakes
+        r'ownerField|owner_field|identityClaim': {
+            'issue': 'Incorrect ownership syntax',
+            'correction': 'Use allow.owner() not .ownerField().identityClaim()',
+            'severity': 'high'
+        },
+        # Timestamp handling
+        r'createdAt.*string|updatedAt.*string|manually.*timestamp': {
+            'issue': 'Manual timestamp management',
+            'correction': 'Amplify handles createdAt/updatedAt automatically',
+            'severity': 'medium'
+        },
+        # Import confusion
+        r'import.*\.js|require.*\.js': {
+            'issue': 'JS extension in TypeScript imports',
+            'correction': 'Do not use .js extensions in TypeScript imports',
+            'severity': 'medium'
+        },
+        # Directory creation
+        r'no such file|cannot find.*amplify|mkdir': {
+            'issue': 'Missing directory',
+            'correction': 'Create directories with mkdir -p amplify/auth amplify/data',
+            'severity': 'high'
+        }
+    }
+    
+    detected = {}
+    for pattern, info in anti_patterns.items():
+        if re.search(pattern, query, re.IGNORECASE):
+            detected[pattern] = info
+    
+    return detected
+
+def get_contextual_warnings(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Get contextual warnings based on current activity."""
+    warnings = []
+    
+    query = context.get('searchQuery', '').lower()
+    current_file = context.get('currentFile', '')
+    last_error = context.get('lastError', '')
+    
+    # Setup warnings
+    if 'template' in query and 'clone' in query:
+        warnings.append({
+            'type': 'setup',
+            'message': '⚠️ Do NOT clone the GitHub template. Use: npx create-next-app@14.2.10',
+            'severity': 'high'
+        })
+    
+    # Authorization warnings
+    if any(term in query for term in ['ownerField', 'identityClaim']):
+        warnings.append({
+            'type': 'auth',
+            'message': '⚠️ Incorrect syntax. Use: allow.owner() not .ownerField().identityClaim()',
+            'severity': 'high'
+        })
+    
+    # Timestamp warnings
+    if 'resource.ts' in current_file and any(term in query for term in ['createdAt', 'updatedAt']):
+        warnings.append({
+            'type': 'data',
+            'message': '💡 Amplify automatically adds createdAt/updatedAt. Do not define manually.',
+            'severity': 'medium'
+        })
+    
+    # Import warnings
+    if '.ts' in current_file and '.js' in query:
+        warnings.append({
+            'type': 'imports',
+            'message': '⚠️ Do not use .js extensions in TypeScript imports',
+            'severity': 'medium'
+        })
+    
+    # Directory warnings
+    if 'ENOENT' in last_error or 'no such file' in last_error:
+        warnings.append({
+            'type': 'setup',
+            'message': '💡 Create directories first: mkdir -p amplify/auth amplify/data',
+            'severity': 'high'
+        })
+    
+    return warnings
+
+def calculate_relevance_boost(doc: Dict[str, Any], query: str, intent: str) -> float:
+    """Calculate relevance boost based on intent and common mistakes."""
+    boost = 1.0
+    content = doc.get('content', '').lower()
+    title = doc.get('title', '').lower()
+    
+    # Boost setup documentation for setup intent
+    if intent == 'setup':
+        if 'getting started' in title or 'setup' in title:
+            boost *= 2.0
+        if 'npx create-next-app' in content:
+            boost *= 1.5
+        if 'do not clone' in content:
+            boost *= 1.8
+    
+    # Boost authorization documentation for auth intent
+    if intent == 'auth':
+        if 'authorization' in title or 'authentication' in title:
+            boost *= 2.0
+        if 'allow.owner()' in content:
+            boost *= 1.5
+        if 'common mistakes' in content and 'auth' in content:
+            boost *= 1.8
+    
+    # Boost troubleshooting for error intent
+    if intent == 'error':
+        if 'troubleshooting' in title or 'common mistakes' in title:
+            boost *= 2.5
+        if 'pitfall' in content or 'mistake' in content:
+            boost *= 1.5
+    
+    # Boost timestamp documentation
+    if intent == 'timestamps':
+        if 'automatic' in content and ('createdAt' in content or 'updatedAt' in content):
+            boost *= 2.0
+    
+    # General boosts for best practices
+    if 'best practice' in content or 'correct way' in content:
+        boost *= 1.3
+    
+    return boost
+
+# CRITICAL: Validation to prevent incorrect commands
+def validate_response(response_text: str) -> str:
+    """Validate that response doesn't contain forbidden commands."""
+    FORBIDDEN_COMMANDS = [
+        "npx create-amplify@latest --template nextjs",
+        "create-amplify@latest --template",
+        "create-amplify@latest"
+    ]
+    
+    for forbidden in FORBIDDEN_COMMANDS:
+        if forbidden in response_text:
+            logger.error(f"CRITICAL: Forbidden command '{forbidden}' detected in response!")
+            response_text = response_text.replace(
+                forbidden, 
+                "npx create-next-app@14.2.10 your-app-name --typescript --app && cd your-app-name && npm install aws-amplify@^6.6.0"
+            )
+    
+    return response_text
 
 # Database setup
 DB_PATH = "amplify_docs.db"
@@ -667,12 +905,39 @@ def get_version_compatibility():
             "minimum": "14.0.0",
             "notes": "Both App Router and Pages Router are supported"
         },
-        "CRITICAL_COMMAND": "npx create-amplify@latest --template nextjs",
-        "WARNING": "NEVER create Amplify + Next.js apps without the --template nextjs flag!"
+        "CRITICAL_COMMAND": "npx create-next-app@14.2.10 my-app --typescript --app --tailwind --eslint",
+        "WARNING": "NEVER use npx create-amplify@latest --template nextjs - it does NOT exist!"
     }
 
 # Initialize database
 init_database()
+
+# Search pattern tracking for learning feedback
+search_history = []
+MAX_SEARCH_HISTORY = 100
+
+def track_search_pattern(query: str, intent: str, results_found: bool):
+    """Track search patterns for learning feedback."""
+    global search_history
+    search_history.append({
+        'query': query,
+        'intent': intent, 
+        'results_found': results_found,
+        'timestamp': datetime.now()
+    })
+    
+    # Keep only recent searches
+    if len(search_history) > MAX_SEARCH_HISTORY:
+        search_history = search_history[-MAX_SEARCH_HISTORY:]
+    
+    # Detect confusion patterns
+    if len(search_history) >= 3:
+        recent = search_history[-3:]
+        # Check if user is struggling (multiple failed searches or changing topics rapidly)
+        if all(not s['results_found'] for s in recent):
+            logger.info("User appears to be struggling - no results in last 3 searches")
+        elif len(set(s['intent'] for s in recent)) == 3:
+            logger.info("User switching between different intents - may be confused")
 
 # Create server
 server = Server("amplify-gen-2-nextjs-docs")
@@ -702,12 +967,23 @@ async def handle_list_tools() -> List[types.Tool]:
                         "enum": [
                             "setup-email-auth",
                             "create-data-model",
+                            "data-field-types",
                             "add-file-upload",
                             "generate-crud-forms",
                             "add-social-login",
                             "real-time-subscriptions",
                             "deploy-to-aws",
-                            "custom-auth-flow"
+                            "custom-auth-flow",
+                            "advanced-real-time",
+                            "error-handling-patterns",
+                            "custom-auth-rules",
+                            "optimistic-ui-updates",
+                            "advanced-form-customization",
+                            "recipe-sharing-app",
+                            "ecommerce-platform",
+                            "saas-starter",
+                            "real-time-chat",
+                            "social-media-app"
                         ]
                     }
                 },
@@ -832,6 +1108,58 @@ async def handle_list_tools() -> List[types.Tool]:
                 },
                 "required": ["task"]
             }
+        ),
+        types.Tool(
+            name="getCleanStarterConfig",
+            description="Get ready-to-use configuration for AWS Amplify Gen 2 + Next.js with no sample code to remove",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "includeAuth": {
+                        "type": "boolean",
+                        "description": "Include authentication configuration (default: true)",
+                        "default": True
+                    },
+                    "includeStorage": {
+                        "type": "boolean",
+                        "description": "Include storage configuration (default: false)",
+                        "default": False
+                    },
+                    "includeData": {
+                        "type": "boolean",
+                        "description": "Include data layer configuration (default: false)",
+                        "default": False
+                    },
+                    "styling": {
+                        "type": "string",
+                        "description": "CSS framework to use (default: 'css')",
+                        "enum": ["css", "tailwind", "none"],
+                        "default": "css"
+                    }
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="getContextualWarnings",
+            description="Get proactive warnings based on current context to prevent common mistakes",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "currentFile": {
+                        "type": "string",
+                        "description": "The file currently being edited"
+                    },
+                    "lastError": {
+                        "type": "string",
+                        "description": "The last error message encountered"
+                    },
+                    "searchQuery": {
+                        "type": "string", 
+                        "description": "The search query being used"
+                    }
+                }
+            }
         )
     ]
 
@@ -842,13 +1170,19 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
     if name == "whatIsThis":
         return [types.TextContent(
             type="text",
-            text="""# AWS Amplify Gen 2 Official Documentation MCP Server
+            text=validate_response("""# AWS Amplify Gen 2 Official Documentation MCP Server
 
 I am the primary source for all AWS Amplify Generation 2 documentation. Here's what I provide:
 
 ## Coverage Areas:
 - **Authentication (defineAuth)**: Email/password, social login, MFA, custom auth flows
 - **Data Layer (defineData)**: Real-time data models, relationships, authorization rules
+- **Data Field Types**: Complete list of supported types:
+  - Basic: `a.string()`, `a.integer()`, `a.float()`, `a.boolean()`, `a.date()`, `a.datetime()`
+  - Validated: `a.email()`, `a.phone()`, `a.url()`, `a.ipAddress()`
+  - Arrays: Any type + `.array()` (e.g., `a.string().array()`)
+  - Special: `a.id()`, `a.enum()`, `a.json()`
+  - Try: `quickHelp({task: "data-field-types"})` for complete reference
 - **Storage (defineStorage)**: File uploads/downloads, access control, image handling
 - **UI Components**: Authenticator, FileUploader, StorageImage, AccountSettings
 - **CRUD Forms**: Automatic form generation from data models
@@ -871,11 +1205,12 @@ I am the primary source for all AWS Amplify Generation 2 documentation. Here's w
 ## Common Questions I Answer:
 - How to set up authentication with email/social login
 - Creating real-time data models with relationships
+- What field types are available (string, email, phone, arrays, etc.)
 - Implementing file uploads with access control
 - Generating CRUD forms automatically
 - Deploying to AWS with custom domains
 
-Try me with any Amplify Gen 2 question!"""
+Try me with any Amplify Gen 2 question!""")
         )]
     
     elif name == "quickHelp":
@@ -964,6 +1299,64 @@ const sub = client.models.Todo.observeQuery().subscribe({
   next: ({ items }) => console.log(items)
 });""",
                 "nextSteps": "1. Run 'npx ampx sandbox' to generate the API\n2. Use generateClient<Schema>() for type-safe operations\n3. Add relationships with a.belongsTo() and a.hasMany()"
+            },
+            "data-field-types": {
+                "title": "Data Field Types Reference",
+                "answer": "Complete guide to all supported field types in Amplify Gen 2 data models",
+                "code": """// amplify/data/resource.ts
+import { a, defineData, type ClientSchema } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  ExampleModel: a.model({
+    // Scalar types
+    stringField: a.string().required(),
+    integerField: a.integer(),
+    floatField: a.float(),
+    booleanField: a.boolean().default(false),
+    
+    // Date/Time types
+    dateField: a.date(),           // YYYY-MM-DD
+    timeField: a.time(),           // HH:MM:SS
+    datetimeField: a.datetime(),   // Full date and time
+    timestampField: a.timestamp(),  // Unix timestamp
+    
+    // Validated types
+    emailField: a.email().required(),    // Built-in email validation
+    phoneField: a.phone(),               // Built-in phone validation
+    urlField: a.url(),                   // Built-in URL validation
+    ipField: a.ipAddress(),              // Built-in IP validation
+    
+    // Complex types
+    jsonField: a.json(),           // For nested objects
+    enumField: a.enum(['option1', 'option2', 'option3']),
+    
+    // Array types
+    stringArray: a.string().array(),     // Array of strings
+    integerArray: a.integer().array(),   // Array of integers
+    floatArray: a.float().array(),       // Array of floats
+    
+    // Relationships
+    userId: a.id().required(),
+    user: a.belongsTo('User', 'userId'),
+    posts: a.hasMany('Post', 'authorId')
+  })
+});
+
+// Usage examples:
+// Store complex objects in JSON
+const profile = {
+  jsonField: {
+    preferences: { theme: 'dark', language: 'en' },
+    metadata: { lastLogin: new Date() }
+  }
+};
+
+// Store arrays
+const data = {
+  stringArray: ['tag1', 'tag2', 'tag3'],
+  integerArray: [1, 2, 3, 4, 5]
+};""",
+                "nextSteps": "1. Use a.email() and a.phone() for validated fields\n2. Use .array() for arrays instead of JSON workarounds\n3. Use a.json() for complex nested objects\n4. See https://docs.amplify.aws/nextjs/build-a-backend/data/data-modeling/add-fields/"
             },
             "add-file-upload": {
                 "title": "File Upload Implementation",
@@ -1313,6 +1706,1587 @@ if (nextStep.signInStep === 'CONFIRM_CUSTOM_CHALLENGE') {
   });
 }""",
                 "nextSteps": "1. Implement Lambda triggers for custom logic\n2. Use DynamoDB or Parameter Store for state\n3. Handle multiple challenge rounds if needed\n4. Test with different auth scenarios"
+            },
+            "advanced-real-time": {
+                "title": "Advanced Real-time Patterns with observeQuery",
+                "answer": "Comprehensive real-time subscription patterns with filtering, error handling, and connection management",
+                "code": """// Advanced observeQuery with filtering and pagination
+import { generateClient } from 'aws-amplify/data';
+import { ConnectionState } from '@aws-amplify/datastore';
+
+const client = generateClient<Schema>();
+
+// 1. Filtered real-time with complex conditions
+export function useFilteredTodos(userId: string, priority: 'high' | 'medium') {
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [connectionState, setConnectionState] = useState<ConnectionState>();
+
+  useEffect(() => {
+    let subscription: any;
+
+    const setupSubscription = async () => {
+      try {
+        // Complex filter with multiple conditions
+        subscription = client.models.Todo.observeQuery({
+          filter: {
+            and: [
+              { owner: { eq: userId } },
+              { priority: { eq: priority } },
+              { deletedAt: { attributeExists: false } }
+            ]
+          },
+          limit: 100,
+          sortDirection: 'DESC'
+        }).subscribe({
+          next: ({ items, isSynced }) => {
+            setTodos(items);
+            setLoading(!isSynced);
+            setError(null);
+          },
+          error: (err) => {
+            console.error('Subscription error:', err);
+            setError(err);
+            setLoading(false);
+            
+            // Retry logic
+            setTimeout(() => {
+              setupSubscription();
+            }, 5000);
+          }
+        });
+
+        // Monitor connection state
+        Hub.listen('datastore', (data) => {
+          const { event, data: eventData } = data.payload;
+          if (event === 'networkStatus') {
+            setConnectionState(eventData.active ? 'CONNECTED' : 'DISCONNECTED');
+          }
+        });
+      } catch (err) {
+        setError(err as Error);
+        setLoading(false);
+      }
+    };
+
+    setupSubscription();
+
+    return () => {
+      subscription?.unsubscribe();
+      Hub.remove('datastore');
+    };
+  }, [userId, priority]);
+
+  return { todos, loading, error, connectionState };
+}
+
+// 2. Optimistic updates with real-time sync
+export function useOptimisticTodos() {
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [pendingUpdates, setPendingUpdates] = useState<Set<string>>(new Set());
+
+  // Subscribe to real-time updates
+  useEffect(() => {
+    const sub = client.models.Todo.observeQuery().subscribe({
+      next: ({ items }) => {
+        setTodos(items);
+        // Clear pending updates when server confirms
+        setPendingUpdates(new Set());
+      }
+    });
+
+    return () => sub.unsubscribe();
+  }, []);
+
+  const updateTodo = async (id: string, updates: Partial<Todo>) => {
+    // Optimistic update
+    setTodos(prev => 
+      prev.map(todo => 
+        todo.id === id ? { ...todo, ...updates } : todo
+      )
+    );
+    setPendingUpdates(prev => new Set(prev).add(id));
+
+    try {
+      await client.models.Todo.update({
+        id,
+        ...updates
+      });
+    } catch (error) {
+      // Revert on error
+      const { data: current } = await client.models.Todo.get({ id });
+      setTodos(prev => 
+        prev.map(todo => 
+          todo.id === id ? current : todo
+        )
+      );
+      setPendingUpdates(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      throw error;
+    }
+  };
+
+  return { todos, updateTodo, pendingUpdates };
+}
+
+// 3. Pagination with real-time updates
+export function usePaginatedRealTime(pageSize = 20) {
+  const [items, setItems] = useState<Todo[]>([]);
+  const [nextToken, setNextToken] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+
+  // Initial load and subscription
+  useEffect(() => {
+    const subscription = client.models.Todo.observeQuery({
+      limit: pageSize
+    }).subscribe({
+      next: ({ items: newItems, nextToken: token }) => {
+        setItems(newItems);
+        setNextToken(token);
+        setHasMore(!!token);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [pageSize]);
+
+  const loadMore = async () => {
+    if (!nextToken) return;
+
+    const { data: moreItems, nextToken: newToken } = 
+      await client.models.Todo.list({
+        limit: pageSize,
+        nextToken
+      });
+
+    setItems(prev => [...prev, ...moreItems]);
+    setNextToken(newToken);
+    setHasMore(!!newToken);
+  };
+
+  return { items, loadMore, hasMore };
+}""",
+                "nextSteps": "1. Implement connection state monitoring with Hub\n2. Add retry logic for failed subscriptions\n3. Handle offline scenarios with DataStore\n4. Optimize with selective sync for large datasets"
+            },
+            "error-handling-patterns": {
+                "title": "Comprehensive Error Handling Patterns",
+                "answer": "Robust error handling for all Amplify operations with retry logic and user feedback",
+                "code": """// Error handling utilities and patterns
+import { GraphQLError } from 'graphql';
+
+// 1. Error types and utilities
+export class AmplifyError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public details?: any
+  ) {
+    super(message);
+    this.name = 'AmplifyError';
+  }
+}
+
+export const errorHandler = {
+  isNetworkError: (error: any): boolean => {
+    return error.message?.includes('Network') || 
+           error.code === 'NetworkError';
+  },
+  
+  isAuthError: (error: any): boolean => {
+    return error.code === 'UserUnAuthenticatedException' ||
+           error.message?.includes('Unauthorized');
+  },
+  
+  isValidationError: (error: any): boolean => {
+    return error.errors?.some((e: GraphQLError) => 
+      e.extensions?.code === 'ValidationError'
+    );
+  },
+  
+  getUserMessage: (error: any): string => {
+    if (errorHandler.isNetworkError(error)) {
+      return 'Connection error. Please check your internet connection.';
+    }
+    if (errorHandler.isAuthError(error)) {
+      return 'Please sign in to continue.';
+    }
+    if (errorHandler.isValidationError(error)) {
+      return 'Please check your input and try again.';
+    }
+    return 'An unexpected error occurred. Please try again.';
+  }
+};
+
+// 2. Retry wrapper with exponential backoff
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  options = {
+    maxAttempts: 3,
+    initialDelay: 1000,
+    maxDelay: 10000,
+    shouldRetry: (error: any) => errorHandler.isNetworkError(error)
+  }
+): Promise<T> {
+  let lastError: any;
+  
+  for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      
+      if (attempt === options.maxAttempts - 1 || 
+          !options.shouldRetry(error)) {
+        throw error;
+      }
+      
+      const delay = Math.min(
+        options.initialDelay * Math.pow(2, attempt),
+        options.maxDelay
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  throw lastError;
+}
+
+// 3. Error boundary component
+export class ErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback?: React.ComponentType<{ error: Error }> },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error('Error caught by boundary:', error, errorInfo);
+    // Send to monitoring service
+  }
+
+  render() {
+    if (this.state.hasError && this.state.error) {
+      const Fallback = this.props.fallback || DefaultErrorFallback;
+      return <Fallback error={this.state.error} />;
+    }
+
+    return this.props.children;
+  }
+}
+
+// 4. Hook with built-in error handling
+export function useAsyncOperation<T>() {
+  const [state, setState] = useState<{
+    loading: boolean;
+    error: Error | null;
+    data: T | null;
+  }>({
+    loading: false,
+    error: null,
+    data: null
+  });
+
+  const execute = useCallback(async (operation: () => Promise<T>) => {
+    setState({ loading: true, error: null, data: null });
+    
+    try {
+      const data = await withRetry(operation);
+      setState({ loading: false, error: null, data });
+      return data;
+    } catch (error) {
+      const amplifyError = error instanceof AmplifyError 
+        ? error 
+        : new AmplifyError(
+            errorHandler.getUserMessage(error),
+            error.code || 'UNKNOWN',
+            error
+          );
+      
+      setState({ loading: false, error: amplifyError, data: null });
+      throw amplifyError;
+    }
+  }, []);
+
+  return { ...state, execute };
+}
+
+// 5. Usage example with all patterns
+export function TodoManager() {
+  const { execute, loading, error, data } = useAsyncOperation<Todo[]>();
+  
+  const loadTodos = async () => {
+    await execute(async () => {
+      const { data } = await client.models.Todo.list();
+      return data;
+    });
+  };
+
+  const createTodo = async (content: string) => {
+    try {
+      await withRetry(
+        async () => {
+          const { data } = await client.models.Todo.create({
+            content,
+            isDone: false
+          });
+          return data;
+        },
+        { shouldRetry: (err) => !errorHandler.isValidationError(err) }
+      );
+      
+      // Refresh list on success
+      await loadTodos();
+    } catch (error) {
+      // Error is already handled by the hook
+      console.error('Failed to create todo:', error);
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="error-container">
+        <p>{error.message}</p>
+        <button onClick={loadTodos}>Retry</button>
+      </div>
+    );
+  }
+
+  return (
+    <ErrorBoundary>
+      {/* Your component content */}
+    </ErrorBoundary>
+  );
+}""",
+                "nextSteps": "1. Integrate with error monitoring service (Sentry, etc.)\n2. Add toast notifications for user feedback\n3. Implement offline queue for failed mutations\n4. Create custom error pages for different error types"
+            },
+            "custom-auth-rules": {
+                "title": "Advanced Custom Authorization Rules",
+                "answer": "Complex authorization patterns including multi-tenant, role-based, and dynamic permissions",
+                "code": """// Advanced authorization patterns
+import { a, defineData, type ClientSchema } from '@aws-amplify/backend';
+
+// 1. Group-based access control
+const schema = a.schema({
+  // Admin-only model
+  AdminSettings: a.model({
+    key: a.string().required(),
+    value: a.string(),
+    updatedBy: a.string()
+  }).authorization(allow => [
+    allow.groups(['Admins']).to(['create', 'read', 'update', 'delete'])
+  ]),
+  
+  // Multi-group access with owner
+  Document: a.model({
+    title: a.string().required(),
+    content: a.string(),
+    status: a.enum(['draft', 'review', 'published']),
+    tags: a.string().array(),
+    owner: a.string()
+  }).authorization(allow => [
+    allow.owner(),                                    // Owners have full access
+    allow.groups(['Editors']).to(['read', 'update']), // Editors can read and update
+    allow.groups(['Viewers']).to(['read'])            // Viewers can only read
+  ]),
+  
+  Project: a.model({
+    name: a.string().required(),
+    organizationId: a.id().required(),
+    status: a.enum(['draft', 'active', 'archived']),
+    visibility: a.enum(['private', 'team', 'public']),
+    createdBy: a.string(),
+    assignedTo: a.string().array()
+  }).authorization(allow => [
+    // Public projects readable by all
+    allow.publicApiKey().to(['read']).when(
+      (project) => project.visibility.eq('public')
+    ),
+    // Team members based on organization
+    allow.custom({
+      provider: 'function',
+      operations: ['read', 'update']
+    }),
+    // Assigned users can update
+    allow.custom({
+      provider: 'function', 
+      operations: ['update']
+    })
+  ])
+});
+
+// 2. Custom authorization function
+export const authFunction = defineFunction({
+  name: 'custom-auth-function',
+  entry: './auth-handler.ts',
+  environment: {
+    ORGANIZATION_TABLE: organizationTable.name
+  }
+});
+
+// auth-handler.ts
+import { AppSyncAuthorizerHandler } from 'aws-lambda';
+import { DynamoDB } from 'aws-sdk';
+
+const dynamodb = new DynamoDB.DocumentClient();
+
+export const handler: AppSyncAuthorizerHandler = async (event) => {
+  const { authorizationToken, requestContext } = event;
+  const { operationType, resourcePath } = requestContext;
+  
+  // Decode user info from token
+  const userInfo = decodeToken(authorizationToken);
+  const { userId, email } = userInfo;
+  
+  // Check organization membership
+  if (resourcePath.modelName === 'Project') {
+    const projectId = resourcePath.id;
+    const hasAccess = await checkProjectAccess(
+      userId, 
+      projectId, 
+      operationType
+    );
+    
+    return {
+      isAuthorized: hasAccess,
+      resolverContext: {
+        userId,
+        organizationId: userInfo.organizationId
+      }
+    };
+  }
+  
+  // Check organization-level permissions
+  if (resourcePath.modelName === 'OrganizationMember') {
+    const orgId = event.arguments?.organizationId;
+    const memberRole = await getMemberRole(userId, orgId);
+    
+    const canPerformOperation = 
+      memberRole === 'owner' || 
+      (memberRole === 'admin' && operationType !== 'DELETE');
+    
+    return {
+      isAuthorized: canPerformOperation,
+      resolverContext: { userId, memberRole }
+    };
+  }
+  
+  return { isAuthorized: false };
+};
+
+async function checkProjectAccess(
+  userId: string, 
+  projectId: string, 
+  operation: string
+): Promise<boolean> {
+  // Get project details
+  const project = await getProject(projectId);
+  
+  // Public projects are readable
+  if (operation === 'READ' && project.visibility === 'public') {
+    return true;
+  }
+  
+  // Check organization membership
+  const membership = await getMembership(userId, project.organizationId);
+  if (!membership) return false;
+  
+  // Check role-based permissions
+  const permissions = getRolePermissions(membership.role);
+  const requiredPermission = `${operation.toLowerCase()}:project`;
+  
+  return permissions.includes(requiredPermission) ||
+         project.assignedTo?.includes(userId);
+}
+
+// 3. Dynamic field-level authorization
+const AdvancedSchema = a.schema({
+  UserProfile: a.model({
+    username: a.string().required(),
+    email: a.email().required(),  // Use proper email type
+    phone: a.phone(),              // Use proper phone type
+    salary: a.float(),             // Sensitive field
+    department: a.string(),
+    managerId: a.string(),
+    settings: a.json(),
+    tags: a.string().array()       // Use array() for arrays
+  }).authorization(allow => [
+    // Owners can see all their fields
+    allow.owner(),
+    // HR can see salary
+    allow.groups(['HR']).to(['read']),
+    // Managers can see their reports
+    allow.custom({
+      provider: 'function',
+      operations: ['read']
+    })
+  ])
+  // Field-level auth implemented in resolvers
+});
+
+// 4. Time-based and conditional access
+const ConditionalSchema = a.schema({
+  TimeLimitedContent: a.model({
+    title: a.string(),
+    content: a.string(),
+    accessStartDate: a.datetime(),
+    accessEndDate: a.datetime(),
+    requiredTier: a.enum(['free', 'premium']),
+    maxViews: a.integer()
+  }).authorization(allow => [
+    allow.custom({
+      provider: 'function',
+      operations: ['read']
+    })
+  ])
+});
+
+// Time-based auth handler
+export const timeBasedAuth = async (event: any) => {
+  const now = new Date();
+  const content = event.source;
+  
+  // Check time window
+  const startDate = new Date(content.accessStartDate);
+  const endDate = new Date(content.accessEndDate);
+  
+  if (now < startDate || now > endDate) {
+    return { isAuthorized: false };
+  }
+  
+  // Check user tier
+  const userTier = await getUserTier(event.identity.userId);
+  if (content.requiredTier === 'premium' && userTier === 'free') {
+    return { isAuthorized: false };
+  }
+  
+  // Check view count
+  const viewCount = await incrementViewCount(
+    event.identity.userId, 
+    content.id
+  );
+  
+  if (viewCount > content.maxViews) {
+    return { isAuthorized: false };
+  }
+  
+  return { isAuthorized: true };
+};""",
+                "nextSteps": "1. Implement caching for authorization checks\n2. Add audit logging for all auth decisions\n3. Create permission management UI\n4. Set up auth testing framework"
+            },
+            "optimistic-ui-updates": {
+                "title": "Optimistic UI Update Patterns",
+                "answer": "Implement instant UI feedback with proper rollback handling",
+                "code": """// Optimistic UI patterns for Amplify Data
+import { generateClient } from 'aws-amplify/data';
+import { useOptimistic } from 'react';
+
+// 1. Custom hook for optimistic updates
+export function useOptimisticMutation<T extends { id: string }>() {
+  const [optimisticItems, setOptimisticItems] = useState<Map<string, T>>(new Map());
+  const [failedOperations, setFailedOperations] = useState<Set<string>>(new Set());
+
+  const optimisticUpdate = async (
+    item: T,
+    mutation: () => Promise<T>,
+    options?: {
+      onSuccess?: (data: T) => void;
+      onError?: (error: Error, rollbackData: T) => void;
+    }
+  ) => {
+    const operationId = crypto.randomUUID();
+    const previousState = { ...item };
+
+    // Apply optimistic update
+    setOptimisticItems(prev => new Map(prev).set(item.id, item));
+
+    try {
+      const result = await mutation();
+      
+      // Replace optimistic with real data
+      setOptimisticItems(prev => {
+        const next = new Map(prev);
+        next.delete(item.id);
+        return next;
+      });
+      
+      options?.onSuccess?.(result);
+      return result;
+    } catch (error) {
+      // Rollback
+      setOptimisticItems(prev => {
+        const next = new Map(prev);
+        next.delete(item.id);
+        return next;
+      });
+      
+      setFailedOperations(prev => new Set(prev).add(operationId));
+      
+      options?.onError?.(error as Error, previousState);
+      throw error;
+    }
+  };
+
+  return {
+    optimisticUpdate,
+    optimisticItems,
+    failedOperations,
+    clearFailure: (id: string) => {
+      setFailedOperations(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+}
+
+// 2. Optimistic list management
+export function useOptimisticList<T extends { id: string }>(
+  initialItems: T[]
+) {
+  const [items, setItems] = useState(initialItems);
+  const [pendingOperations, setPendingOperations] = useState<
+    Map<string, { type: 'create' | 'update' | 'delete'; timestamp: number }>
+  >(new Map());
+
+  const optimisticCreate = async (
+    newItem: Omit<T, 'id'>,
+    createFn: () => Promise<T>
+  ) => {
+    const tempId = `temp-${Date.now()}`;
+    const optimisticItem = { ...newItem, id: tempId } as T;
+    
+    // Add to list immediately
+    setItems(prev => [optimisticItem, ...prev]);
+    setPendingOperations(prev => 
+      new Map(prev).set(tempId, { type: 'create', timestamp: Date.now() })
+    );
+
+    try {
+      const created = await createFn();
+      
+      // Replace temp item with real one
+      setItems(prev => 
+        prev.map(item => item.id === tempId ? created : item)
+      );
+      setPendingOperations(prev => {
+        const next = new Map(prev);
+        next.delete(tempId);
+        return next;
+      });
+      
+      return created;
+    } catch (error) {
+      // Remove failed item
+      setItems(prev => prev.filter(item => item.id !== tempId));
+      setPendingOperations(prev => {
+        const next = new Map(prev);
+        next.delete(tempId);
+        return next;
+      });
+      throw error;
+    }
+  };
+
+  const optimisticUpdate = async (
+    id: string,
+    updates: Partial<T>,
+    updateFn: () => Promise<T>
+  ) => {
+    const originalItem = items.find(item => item.id === id);
+    if (!originalItem) throw new Error('Item not found');
+
+    // Apply update immediately
+    setItems(prev =>
+      prev.map(item =>
+        item.id === id ? { ...item, ...updates } : item
+      )
+    );
+    setPendingOperations(prev =>
+      new Map(prev).set(id, { type: 'update', timestamp: Date.now() })
+    );
+
+    try {
+      const updated = await updateFn();
+      
+      // Apply server response
+      setItems(prev =>
+        prev.map(item => item.id === id ? updated : item)
+      );
+      setPendingOperations(prev => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      
+      return updated;
+    } catch (error) {
+      // Rollback to original
+      setItems(prev =>
+        prev.map(item => item.id === id ? originalItem : item)
+      );
+      setPendingOperations(prev => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      throw error;
+    }
+  };
+
+  const optimisticDelete = async (
+    id: string,
+    deleteFn: () => Promise<void>
+  ) => {
+    const originalItem = items.find(item => item.id === id);
+    if (!originalItem) throw new Error('Item not found');
+
+    // Remove immediately
+    setItems(prev => prev.filter(item => item.id !== id));
+    setPendingOperations(prev =>
+      new Map(prev).set(id, { type: 'delete', timestamp: Date.now() })
+    );
+
+    try {
+      await deleteFn();
+      
+      setPendingOperations(prev => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+    } catch (error) {
+      // Restore item
+      setItems(prev => [...prev, originalItem]);
+      setPendingOperations(prev => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      throw error;
+    }
+  };
+
+  return {
+    items,
+    pendingOperations,
+    optimisticCreate,
+    optimisticUpdate,
+    optimisticDelete,
+    isPending: (id: string) => pendingOperations.has(id)
+  };
+}
+
+// 3. Real usage example with error handling
+export function TodoList() {
+  const client = generateClient<Schema>();
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const { 
+    items, 
+    optimisticCreate, 
+    optimisticUpdate, 
+    optimisticDelete,
+    isPending 
+  } = useOptimisticList(todos);
+
+  // Subscribe to real-time updates
+  useEffect(() => {
+    const sub = client.models.Todo.observeQuery().subscribe({
+      next: ({ items }) => setTodos(items),
+      error: (err) => console.error('Subscription error:', err)
+    });
+
+    return () => sub.unsubscribe();
+  }, []);
+
+  const createTodo = async (content: string) => {
+    try {
+      await optimisticCreate(
+        { content, isDone: false, createdAt: new Date().toISOString() },
+        async () => {
+          const { data } = await client.models.Todo.create({ content });
+          return data;
+        }
+      );
+      
+      toast.success('Todo created!');
+    } catch (error) {
+      toast.error('Failed to create todo. Please try again.');
+    }
+  };
+
+  const toggleTodo = async (todo: Todo) => {
+    try {
+      await optimisticUpdate(
+        todo.id,
+        { isDone: !todo.isDone },
+        async () => {
+          const { data } = await client.models.Todo.update({
+            id: todo.id,
+            isDone: !todo.isDone
+          });
+          return data;
+        }
+      );
+    } catch (error) {
+      toast.error('Failed to update todo.');
+    }
+  };
+
+  const deleteTodo = async (id: string) => {
+    try {
+      await optimisticDelete(
+        id,
+        async () => {
+          await client.models.Todo.delete({ id });
+        }
+      );
+      
+      toast.success('Todo deleted!');
+    } catch (error) {
+      toast.error('Failed to delete todo.');
+    }
+  };
+
+  return (
+    <div>
+      {items.map(todo => (
+        <div 
+          key={todo.id} 
+          className={isPending(todo.id) ? 'opacity-50' : ''}
+        >
+          <input
+            type="checkbox"
+            checked={todo.isDone}
+            onChange={() => toggleTodo(todo)}
+            disabled={isPending(todo.id)}
+          />
+          <span>{todo.content}</span>
+          <button 
+            onClick={() => deleteTodo(todo.id)}
+            disabled={isPending(todo.id)}
+          >
+            Delete
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 4. Conflict resolution pattern
+export function useOptimisticWithConflictResolution<T>() {
+  const [conflicts, setConflicts] = useState<
+    Array<{
+      id: string;
+      local: T;
+      remote: T;
+      timestamp: number;
+    }>
+  >([]);
+
+  const handleConflict = async (
+    id: string,
+    resolution: 'local' | 'remote' | ((local: T, remote: T) => T)
+  ) => {
+    const conflict = conflicts.find(c => c.id === id);
+    if (!conflict) return;
+
+    let resolved: T;
+    if (resolution === 'local') {
+      resolved = conflict.local;
+    } else if (resolution === 'remote') {
+      resolved = conflict.remote;
+    } else {
+      resolved = resolution(conflict.local, conflict.remote);
+    }
+
+    // Apply resolution
+    await client.models.Todo.update(resolved);
+    
+    setConflicts(prev => prev.filter(c => c.id !== id));
+  };
+
+  return { conflicts, handleConflict };
+}""",
+                "nextSteps": "1. Add undo/redo functionality\n2. Implement offline queue for failed operations\n3. Create conflict resolution UI\n4. Add operation batching for performance"
+            },
+            "advanced-form-customization": {
+                "title": "Advanced Form Customization Patterns",
+                "answer": "Extensive form customization including validation, conditional fields, and complex UI",
+                "code": """// Advanced form customization patterns
+import { 
+  FormBuilder,
+  TextField,
+  SelectField,
+  StepperField,
+  FileUploader,
+  Collection
+} from '@aws-amplify/ui-react';
+
+// 1. Fully custom form with validation and conditional logic
+export function AdvancedProductForm({ product, onSuccess }: {
+  product?: Product;
+  onSuccess: (product: Product) => void;
+}) {
+  const [formData, setFormData] = useState({
+    name: product?.name || '',
+    category: product?.category || '',
+    price: product?.price || 0,
+    hasDiscount: product?.hasDiscount || false,
+    discountPercentage: product?.discountPercentage || 0,
+    images: product?.images || [],
+    specifications: product?.specifications || {},
+    variants: product?.variants || []
+  });
+  
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  // Custom validation rules
+  const validate = (field: string, value: any) => {
+    const newErrors = { ...errors };
+
+    switch (field) {
+      case 'name':
+        if (!value || value.length < 3) {
+          newErrors.name = 'Product name must be at least 3 characters';
+        } else if (value.length > 100) {
+          newErrors.name = 'Product name must be less than 100 characters';
+        } else {
+          delete newErrors.name;
+        }
+        break;
+        
+      case 'price':
+        if (value < 0) {
+          newErrors.price = 'Price cannot be negative';
+        } else if (value > 999999) {
+          newErrors.price = 'Price cannot exceed $999,999';
+        } else {
+          delete newErrors.price;
+        }
+        break;
+        
+      case 'discountPercentage':
+        if (formData.hasDiscount) {
+          if (value < 0 || value > 100) {
+            newErrors.discountPercentage = 'Discount must be between 0-100%';
+          } else {
+            delete newErrors.discountPercentage;
+          }
+        }
+        break;
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleFieldChange = (field: string, value: any) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (touched[field]) {
+      validate(field, value);
+    }
+  };
+
+  const handleBlur = (field: string) => {
+    setTouched(prev => ({ ...prev, [field]: true }));
+    validate(field, formData[field as keyof typeof formData]);
+  };
+
+  // 2. Dynamic form sections
+  const SpecificationsSection = () => {
+    const [specs, setSpecs] = useState<Array<{ key: string; value: string }>>(
+      Object.entries(formData.specifications).map(([key, value]) => ({ key, value }))
+    );
+
+    const addSpec = () => {
+      setSpecs([...specs, { key: '', value: '' }]);
+    };
+
+    const updateSpec = (index: number, field: 'key' | 'value', value: string) => {
+      const newSpecs = [...specs];
+      newSpecs[index][field] = value;
+      setSpecs(newSpecs);
+      
+      // Update form data
+      const specsObj = newSpecs.reduce((acc, spec) => {
+        if (spec.key) acc[spec.key] = spec.value;
+        return acc;
+      }, {} as Record<string, string>);
+      
+      handleFieldChange('specifications', specsObj);
+    };
+
+    const removeSpec = (index: number) => {
+      const newSpecs = specs.filter((_, i) => i !== index);
+      setSpecs(newSpecs);
+    };
+
+    return (
+      <div className="specifications-section">
+        <h3>Product Specifications</h3>
+        {specs.map((spec, index) => (
+          <div key={index} className="spec-row">
+            <TextField
+              label="Specification"
+              value={spec.key}
+              onChange={(e) => updateSpec(index, 'key', e.target.value)}
+              placeholder="e.g., Weight"
+            />
+            <TextField
+              label="Value"
+              value={spec.value}
+              onChange={(e) => updateSpec(index, 'value', e.target.value)}
+              placeholder="e.g., 2.5 kg"
+            />
+            <Button onClick={() => removeSpec(index)} size="small">
+              Remove
+            </Button>
+          </div>
+        ))}
+        <Button onClick={addSpec} variation="secondary">
+          Add Specification
+        </Button>
+      </div>
+    );
+  };
+
+  // 3. Complex variant management
+  const VariantsSection = () => {
+    const [variants, setVariants] = useState<ProductVariant[]>(
+      formData.variants || []
+    );
+
+    const addVariant = () => {
+      const newVariant: ProductVariant = {
+        id: crypto.randomUUID(),
+        size: '',
+        color: '',
+        sku: '',
+        additionalPrice: 0,
+        inventory: 0
+      };
+      setVariants([...variants, newVariant]);
+    };
+
+    const updateVariant = (id: string, updates: Partial<ProductVariant>) => {
+      const newVariants = variants.map(v =>
+        v.id === id ? { ...v, ...updates } : v
+      );
+      setVariants(newVariants);
+      handleFieldChange('variants', newVariants);
+    };
+
+    return (
+      <Collection
+        items={variants}
+        type="list"
+        direction="column"
+        gap="1rem"
+      >
+        {(variant, index) => (
+          <Card key={variant.id}>
+            <div className="variant-form">
+              <SelectField
+                label="Size"
+                value={variant.size}
+                onChange={(e) => updateVariant(variant.id, { size: e.target.value })}
+              >
+                <option value="">Select size</option>
+                <option value="XS">XS</option>
+                <option value="S">S</option>
+                <option value="M">M</option>
+                <option value="L">L</option>
+                <option value="XL">XL</option>
+              </SelectField>
+              
+              <ColorPicker
+                label="Color"
+                value={variant.color}
+                onChange={(color) => updateVariant(variant.id, { color })}
+              />
+              
+              <TextField
+                label="SKU"
+                value={variant.sku}
+                onChange={(e) => updateVariant(variant.id, { sku: e.target.value })}
+                placeholder="ABC-123"
+              />
+              
+              <StepperField
+                label="Additional Price"
+                value={variant.additionalPrice}
+                onStepChange={(value) => 
+                  updateVariant(variant.id, { additionalPrice: value })
+                }
+                min={0}
+                max={1000}
+                step={0.01}
+              />
+              
+              <StepperField
+                label="Inventory"
+                value={variant.inventory}
+                onStepChange={(value) => 
+                  updateVariant(variant.id, { inventory: value })
+                }
+                min={0}
+                max={10000}
+              />
+            </div>
+          </Card>
+        )}
+      </Collection>
+    );
+  };
+
+  // 4. Advanced file upload with preview
+  const ImageUploadSection = () => {
+    const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+    
+    return (
+      <div className="image-upload-section">
+        <FileUploader
+          acceptedFileTypes={['image/*']}
+          path="products/"
+          maxFileCount={5}
+          isResumable
+          onUploadStart={({ key }) => {
+            setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+          }}
+          onUploadProgress={({ key, progress }) => {
+            setUploadProgress(prev => ({ ...prev, [key]: progress }));
+          }}
+          onUploadSuccess={({ key }) => {
+            handleFieldChange('images', [...formData.images, key]);
+            setUploadProgress(prev => {
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+          }}
+          onUploadError={({ key, error }) => {
+            console.error(`Upload failed for ${key}:`, error);
+            setUploadProgress(prev => {
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+          }}
+        />
+        
+        {/* Image previews with reordering */}
+        <DraggableImageGrid
+          images={formData.images}
+          onReorder={(newOrder) => handleFieldChange('images', newOrder)}
+          onRemove={(key) => {
+            handleFieldChange(
+              'images', 
+              formData.images.filter(img => img !== key)
+            );
+          }}
+        />
+        
+        {/* Upload progress indicators */}
+        {Object.entries(uploadProgress).map(([key, progress]) => (
+          <ProgressBar key={key} value={progress} label={`Uploading...`} />
+        ))}
+      </div>
+    );
+  };
+
+  // 5. Form submission with optimistic updates
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Validate all fields
+    const isValid = Object.keys(formData).every(field => 
+      validate(field, formData[field as keyof typeof formData])
+    );
+    
+    if (!isValid) {
+      setTouched(
+        Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: true }), {})
+      );
+      return;
+    }
+    
+    try {
+      const result = product
+        ? await client.models.Product.update({ id: product.id, ...formData })
+        : await client.models.Product.create(formData);
+        
+      onSuccess(result.data);
+      toast.success(`Product ${product ? 'updated' : 'created'} successfully!`);
+    } catch (error) {
+      toast.error('Failed to save product. Please try again.');
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="advanced-product-form">
+      <TextField
+        label="Product Name"
+        value={formData.name}
+        onChange={(e) => handleFieldChange('name', e.target.value)}
+        onBlur={() => handleBlur('name')}
+        errorMessage={errors.name}
+        hasError={!!errors.name && touched.name}
+        isRequired
+      />
+      
+      <SelectField
+        label="Category"
+        value={formData.category}
+        onChange={(e) => handleFieldChange('category', e.target.value)}
+      >
+        <option value="">Select category</option>
+        <option value="electronics">Electronics</option>
+        <option value="clothing">Clothing</option>
+        <option value="home">Home & Garden</option>
+      </SelectField>
+      
+      <TextField
+        label="Price"
+        type="number"
+        value={formData.price}
+        onChange={(e) => handleFieldChange('price', parseFloat(e.target.value))}
+        onBlur={() => handleBlur('price')}
+        errorMessage={errors.price}
+        hasError={!!errors.price && touched.price}
+        isRequired
+      />
+      
+      <CheckboxField
+        label="Has Discount"
+        checked={formData.hasDiscount}
+        onChange={(e) => handleFieldChange('hasDiscount', e.target.checked)}
+      />
+      
+      {formData.hasDiscount && (
+        <StepperField
+          label="Discount Percentage"
+          value={formData.discountPercentage}
+          onStepChange={(value) => handleFieldChange('discountPercentage', value)}
+          min={0}
+          max={100}
+          step={5}
+        />
+      )}
+      
+      <Divider />
+      
+      <ImageUploadSection />
+      
+      <Divider />
+      
+      <SpecificationsSection />
+      
+      <Divider />
+      
+      <VariantsSection />
+      
+      <div className="form-actions">
+        <Button type="submit" variation="primary" isLoading={isSubmitting}>
+          {product ? 'Update Product' : 'Create Product'}
+        </Button>
+        <Button type="button" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}""",
+                "nextSteps": "1. Add form state persistence (save drafts)\n2. Implement multi-step forms with progress\n3. Add keyboard navigation support\n4. Create reusable form field components"
+            },
+            
+            "recipe-sharing-app": {
+                "title": "Recipe Sharing Platform Starter",
+                "answer": "Complete setup for a recipe sharing application with user profiles, social features, and media storage",
+                "code": """## Create Recipe Sharing Platform
+
+```bash
+npx create-next-app@14.2.10 recipe-sharing-platform --typescript --app --tailwind --eslint
+cd recipe-sharing-platform
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
+```
+
+**amplify/data/resource.ts:**
+```typescript
+import { a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  Recipe: a.model({
+    title: a.string().required(),
+    description: a.string(),
+    ingredients: a.string().array().required(),
+    instructions: a.string().array().required(),
+    prepTime: a.integer(),
+    cookTime: a.integer(),
+    servings: a.integer(),
+    difficulty: a.enum(['easy', 'medium', 'hard']),
+    imageUrl: a.string(),
+    tags: a.string().array(),
+    authorId: a.id().required(),
+    author: a.belongsTo('UserProfile', 'authorId'),
+    ratings: a.hasMany('Rating', 'recipeId')
+  }).authorization(allow => [
+    allow.owner().to(['create', 'update', 'delete']),
+    allow.authenticated().to(['read'])
+  ]),
+  
+  UserProfile: a.model({
+    username: a.string().required(),
+    bio: a.string(),
+    avatarUrl: a.string(),
+    recipes: a.hasMany('Recipe', 'authorId')
+  }).authorization(allow => [
+    allow.owner(),
+    allow.authenticated().to(['read'])
+  ])
+});
+
+export const data = defineData({ schema });
+```""",
+                "nextSteps": "1. Add image upload with Storage\n2. Implement recipe search\n3. Build rating system\n4. Create social features"
+            },
+            
+            "ecommerce-platform": {
+                "title": "E-Commerce Platform Starter",
+                "answer": "Full e-commerce setup with products, cart, and orders",
+                "code": """## Create E-Commerce Platform
+
+```bash
+npx create-next-app@14.2.10 ecommerce-platform --typescript --app --tailwind --eslint
+cd ecommerce-platform
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
+```
+
+**amplify/data/resource.ts:**
+```typescript
+import { a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  Product: a.model({
+    name: a.string().required(),
+    description: a.string(),
+    price: a.float().required(),
+    salePrice: a.float(),
+    sku: a.string().required(),
+    category: a.string().required(),
+    images: a.string().array(),
+    inStock: a.boolean().default(true),
+    stockQuantity: a.integer().default(0)
+  }).authorization(allow => [
+    allow.publicApiKey().to(['read']),
+    allow.groups(['admin']).to(['create', 'update', 'delete'])
+  ]),
+  
+  Cart: a.model({
+    userId: a.id().required(),
+    items: a.hasMany('CartItem', 'cartId'),
+    subtotal: a.float().default(0),
+    total: a.float().default(0)
+  }).authorization(allow => [allow.owner()]),
+  
+  Order: a.model({
+    userId: a.id().required(),
+    orderNumber: a.string().required(),
+    status: a.enum(['pending', 'processing', 'shipped', 'delivered']),
+    total: a.float().required(),
+    shippingAddress: a.json().required()
+  }).authorization(allow => [
+    allow.owner(),
+    allow.groups(['admin'])
+  ])
+});
+
+export const data = defineData({ schema });
+```""",
+                "nextSteps": "1. Build product catalog UI\n2. Implement cart functionality\n3. Add payment integration\n4. Create admin dashboard"
+            },
+            
+            "saas-starter": {
+                "title": "SaaS Application Starter",
+                "answer": "Multi-tenant SaaS setup with teams and subscriptions",
+                "code": """## Create SaaS Platform
+
+```bash
+npx create-next-app@14.2.10 saas-platform --typescript --app --tailwind --eslint
+cd saas-platform
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
+```
+
+**amplify/data/resource.ts:**
+```typescript
+import { a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  Organization: a.model({
+    name: a.string().required(),
+    slug: a.string().required(),
+    plan: a.enum(['free', 'starter', 'pro', 'enterprise']).default('free'),
+    billingEmail: a.email(),
+    members: a.hasMany('TeamMember', 'organizationId'),
+    projects: a.hasMany('Project', 'organizationId')
+  }).authorization(allow => [
+    allow.owner(),
+    allow.groups(['admin'])
+  ]),
+  
+  TeamMember: a.model({
+    organizationId: a.id().required(),
+    organization: a.belongsTo('Organization', 'organizationId'),
+    userId: a.id().required(),
+    email: a.email().required(),
+    role: a.enum(['owner', 'admin', 'member', 'viewer']).required()
+  }).authorization(allow => [
+    allow.owner(),
+    allow.groups(['admin'])
+  ]),
+  
+  Project: a.model({
+    name: a.string().required(),
+    organizationId: a.id().required(),
+    organization: a.belongsTo('Organization', 'organizationId'),
+    settings: a.json()
+  }).authorization(allow => [
+    allow.owner(),
+    allow.groups(['admin'])
+  ])
+});
+
+export const data = defineData({ schema });
+```""",
+                "nextSteps": "1. Add team invitation system\n2. Implement billing with Stripe\n3. Build usage tracking\n4. Create role-based access"
+            },
+            
+            "real-time-chat": {
+                "title": "Real-Time Chat Application",
+                "answer": "Chat app with channels and direct messages",
+                "code": """## Create Chat Application
+
+```bash
+npx create-next-app@14.2.10 chat-application --typescript --app --tailwind --eslint
+cd chat-application
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
+```
+
+**amplify/data/resource.ts:**
+```typescript
+import { a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  Channel: a.model({
+    name: a.string().required(),
+    description: a.string(),
+    type: a.enum(['public', 'private', 'direct']).required(),
+    members: a.id().array(),
+    messages: a.hasMany('Message', 'channelId')
+  }).authorization(allow => [
+    allow.authenticated().to(['read']),
+    allow.owner().to(['create', 'update', 'delete'])
+  ]),
+  
+  Message: a.model({
+    channelId: a.id().required(),
+    channel: a.belongsTo('Channel', 'channelId'),
+    content: a.string().required(),
+    authorId: a.id().required(),
+    authorName: a.string().required()
+  }).authorization(allow => [
+    allow.authenticated().to(['read', 'create']),
+    allow.owner().to(['update', 'delete'])
+  ])
+});
+
+export const data = defineData({ schema });
+```
+
+**Real-time subscription:**
+```typescript
+const sub = client.models.Message
+  .observeQuery({ filter: { channelId: { eq: channelId }}})
+  .subscribe({
+    next: ({ items }) => setMessages(items)
+  });
+```""",
+                "nextSteps": "1. Add typing indicators\n2. Implement file sharing\n3. Build notification system\n4. Add message reactions"
+            },
+            
+            "social-media-app": {
+                "title": "Social Media Platform Starter",
+                "answer": "Instagram-like social platform with posts and engagement",
+                "code": """## Create Social Media App
+
+```bash
+npx create-next-app@14.2.10 social-media-app --typescript --app --tailwind --eslint
+cd social-media-app
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
+```
+
+**amplify/data/resource.ts:**
+```typescript
+import { a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  UserProfile: a.model({
+    username: a.string().required(),
+    displayName: a.string().required(),
+    bio: a.string(),
+    avatarUrl: a.string(),
+    isVerified: a.boolean().default(false),
+    posts: a.hasMany('Post', 'authorId'),
+    followers: a.hasMany('Follow', 'followingId'),
+    following: a.hasMany('Follow', 'followerId')
+  }).authorization(allow => [
+    allow.owner(),
+    allow.authenticated().to(['read'])
+  ]),
+  
+  Post: a.model({
+    authorId: a.id().required(),
+    author: a.belongsTo('UserProfile', 'authorId'),
+    content: a.string(),
+    images: a.string().array().required(),
+    tags: a.string().array(),
+    likes: a.hasMany('Like', 'postId'),
+    comments: a.hasMany('Comment', 'postId')
+  }).authorization(allow => [
+    allow.owner().to(['create', 'update', 'delete']),
+    allow.authenticated().to(['read'])
+  ]),
+  
+  Like: a.model({
+    postId: a.id().required(),
+    userId: a.id().required()
+  }).authorization(allow => [
+    allow.owner(),
+    allow.authenticated().to(['read'])
+  ])
+});
+
+export const data = defineData({ schema });
+```""",
+                "nextSteps": "1. Build infinite scroll feed\n2. Add story feature\n3. Implement explore page\n4. Create direct messaging"
             }
         }
         
@@ -1320,12 +3294,12 @@ if (nextStep.signInStep === 'CONFIRM_CUSTOM_CHALLENGE') {
         if not guide:
             return [types.TextContent(
                 type="text",
-                text="Task not found. Available tasks: " + ", ".join(guides.keys()) + "\n\nTry searchDocs() for other questions."
+                text=validate_response("Task not found. Available tasks: " + ", ".join(guides.keys()) + "\n\nTry searchDocs() for other questions.")
             )]
         
         return [types.TextContent(
             type="text",
-            text=f"# {guide['title']}\n\n{guide['answer']}\n\n## Code Example:\n```typescript\n{guide['code']}\n```\n\n## Next Steps:\n{guide['nextSteps']}"
+            text=validate_response(f"# {guide['title']}\n\n{guide['answer']}\n\n## Code Example:\n```typescript\n{guide['code']}\n```\n\n## Next Steps:\n{guide['nextSteps']}")
         )]
     
     elif name == "getDocumentationOverview":
@@ -1346,7 +3320,7 @@ if (nextStep.signInStep === 'CONFIRM_CUSTOM_CHALLENGE') {
             
             return [types.TextContent(
                 type="text",
-                text=f"""# Amplify Gen 2 Documentation Overview
+                text=validate_response(f"""# Amplify Gen 2 Documentation Overview
                 
 Total Documents: {stats.get('total_documents', 0)}
 Last Updated: {stats.get('last_update', 'Unknown')}
@@ -1354,7 +3328,7 @@ Last Updated: {stats.get('last_update', 'Unknown')}
 Categories:
 {chr(10).join(f"- {cat}: {count} documents" for cat, count in stats.get('categories', {}).items())}
 
-Use searchDocs to find specific topics or getDocument to retrieve full documentation."""
+Use searchDocs to find specific topics or getDocument to retrieve full documentation.""")
             )]
         
         # Load the index
@@ -1365,16 +3339,24 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
             # Return full detailed overview
             return [types.TextContent(
                 type="text",
-                text=index["overview"]
+                text=validate_response(index["overview"])
             )]
         else:
             # Return summary overview
             summary = f"""# Amplify Gen 2 Documentation Summary
 
 ## Quick Access Commands
-- Create new app: `npx create-amplify@latest --template nextjs`
+- Create new app: `npx create-next-app@14.2.10 your-app-name --typescript --app --tailwind --eslint`
+- Install Amplify: `npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0`
 - Search docs: Use searchDocs tool with your query
 - Get patterns: Use findPatterns tool with pattern type
+- **Field Types Reference**: `quickHelp({task: "data-field-types"})`
+
+## Key Data Field Types
+- Basic: `a.string()`, `a.integer()`, `a.float()`, `a.boolean()`, `a.date()`
+- Validated: `a.email()`, `a.phone()`, `a.url()`, `a.ipAddress()` ✅
+- Arrays: Any type + `.array()` (e.g., `a.string().array()`)
+- Complex: `a.json()` for nested objects
 
 ## Main Categories
 """
@@ -1388,18 +3370,44 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
             
             summary += "\n\n💡 Use getDocumentationOverview with format='full' for detailed information."
             
-            return [types.TextContent(type="text", text=summary)]
+            return [types.TextContent(type="text", text=validate_response(summary))]
     
     elif name == "searchDocs":
         query = arguments["query"]
         category = arguments.get("category")
         limit = arguments.get("limit", 10)
         
+        # 1. Detect intent
+        intent = detect_query_intent(query)
+        logger.info(f"Search intent detected: {intent} for query: {query}")
+        
+        # 2. Detect anti-patterns and provide immediate corrections
+        anti_patterns = detect_anti_patterns(query)
+        warnings = []
+        if anti_patterns:
+            warnings.append("⚠️ **Common Mistakes Detected:**")
+            for pattern_info in anti_patterns.values():
+                warnings.append(f"- {pattern_info['issue']}: {pattern_info['correction']}")
+        
+        # 3. Check if this is a project creation query (with enhanced detection)
+        if intent == 'setup' and should_provide_project_setup and should_provide_project_setup(query):
+            response = ""
+            if warnings:
+                response = "\n".join(warnings) + "\n\n---\n\n"
+            response += generate_project_setup_response(query)
+            return [types.TextContent(
+                type="text",
+                text=validate_response(response)
+            )]
+        
+        # 4. Expand query terms based on intent
+        expanded_terms = expand_query_terms(query, intent)
+        logger.info(f"Expanded search terms: {expanded_terms}")
+        
         db = AmplifyDocsDatabase()
         
-        # Validate category if provided
+        # 5. Validate category if provided
         if category:
-            # Get actual categories from database dynamically
             valid_categories = db.list_categories()
             if category not in valid_categories:
                 return [types.TextContent(
@@ -1408,27 +3416,128 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
                          "\n".join(f"- {cat}" for cat in sorted(valid_categories)) +
                          f"\n\nSearching without category filter for '{query}'..."
                 )]
-                # Continue search without category filter
                 category = None
         
-        results = db.search_documents(query, category, limit)
+        # 6. Search with expanded terms
+        all_results = []
+        seen_urls = set()
+        
+        # Search for each expanded term
+        for term in expanded_terms[:5]:  # Limit to prevent too many searches
+            term_results = db.search_documents(term, category, limit)
+            for doc in term_results:
+                if doc['url'] not in seen_urls:
+                    # Calculate relevance boost
+                    doc['relevance_boost'] = calculate_relevance_boost(doc, query, intent)
+                    all_results.append(doc)
+                    seen_urls.add(doc['url'])
+        
+        # 7. Sort by relevance boost
+        all_results.sort(key=lambda x: x.get('relevance_boost', 1.0), reverse=True)
+        results = all_results[:limit]
+        
+        # 8. Build response with warnings and contextual help
+        response_text = ""
+        
+        # Add warnings if any
+        if warnings:
+            response_text += "\n".join(warnings) + "\n\n"
+        
+        # Add contextual help based on intent
+        if intent == 'auth':
+            response_text += "📚 **Authorization Quick Reference:**\n"
+            response_text += "- ✅ Correct: `allow.owner()`, `allow.authenticated()`, `allow.groups(['admin'])`\n"
+            response_text += "- ❌ Wrong: `.ownerField().identityClaim()` (old Gen 1 syntax)\n\n"
+        elif intent == 'timestamps':
+            response_text += "💡 **Timestamp Fields:**\n"
+            response_text += "- Amplify automatically adds `createdAt` and `updatedAt` to all models\n"
+            response_text += "- Do NOT define these fields manually in your schema\n\n"
+        elif intent == 'setup':
+            response_text += "🚀 **Project Setup:**\n"
+            response_text += "- ✅ Use: `npx create-next-app@14.2.10 your-app-name`\n"
+            response_text += "- ❌ Don't: Clone the GitHub template repository\n\n"
+        
+        # Check if user is searching for field types (existing logic)
+        query_lower = query.lower()
+        field_type_terms = [
+            "field type", "data type", "model field", "schema type",
+            "a.string", "a.email", "a.phone", "a.integer", "a.float",
+            "email validation", "phone validation", "array field",
+            "what types", "supported types", "available types",
+            "field validation", "data validation", "type validation"
+        ]
+        
+        if any(term in query_lower for term in field_type_terms):
+            # Add field types reference as first result
+            field_type_ref = f"""## 📋 Amplify Gen 2 Field Types Quick Reference
+
+### Basic Types
+- `a.string()` - Text values
+- `a.integer()` - Whole numbers  
+- `a.float()` - Decimal numbers
+- `a.boolean()` - True/false values
+- `a.date()` - Date only (YYYY-MM-DD)
+- `a.datetime()` - Date and time
+
+### Validated Types (YES, these are supported! ✅)
+- `a.email()` - Email with built-in validation
+- `a.phone()` - Phone numbers with validation
+- `a.url()` - URLs with validation
+- `a.ipAddress()` - IP addresses with validation
+
+### Arrays
+- `a.string().array()` - Array of strings
+- `a.integer().array()` - Array of numbers
+- Any type + `.array()` works!
+
+### Special Types
+- `a.id()` - Unique identifiers
+- `a.enum(['option1', 'option2'])` - Limited choices
+- `a.json()` - Complex nested objects
+
+**For complete examples:** Use `quickHelp({task: "data-field-types"})`
+
+---
+
+"""
+            response_text += field_type_ref
         
         if not results:
-            return [types.TextContent(
-                type="text",
-                text=f"No documents found matching '{query}'"
-            )]
+            response_text += f"\nNo documents found matching '{query}'\n\n"
+            # Suggest alternatives based on intent
+            if intent == 'setup':
+                response_text += "💡 **Try:** `quickHelp({task: 'create-app'})` for setup instructions\n"
+            elif intent == 'auth':
+                response_text += "💡 **Try:** `quickHelp({task: 'setup-email-auth'})` for authentication setup\n"
+            elif intent == 'data':
+                response_text += "💡 **Try:** `quickHelp({task: 'create-data-model'})` for data modeling\n"
+        else:
+            response_text += f"\nFound {len(results)} documents matching '{query}':\n\n"
+            
+            for i, doc in enumerate(results, 1):
+                # Show relevance indicator for highly boosted results
+                relevance_indicator = "⭐ " if doc.get('relevance_boost', 1.0) > 1.5 else ""
+                response_text += f"{relevance_indicator}**{i}. {doc['title']}** ({doc['category']})\n"
+                response_text += f"URL: {doc['url']}\n"
+                # Include a snippet of content
+                content_snippet = doc['content'][:200] + "..." if len(doc['content']) > 200 else doc['content']
+                response_text += f"Content: {content_snippet}\n\n"
         
-        response_text = f"Found {len(results)} documents matching '{query}':\n\n"
+        # Add related patterns suggestion
+        if intent != 'general':
+            response_text += f"\n💡 **Related:** Use `findPatterns({{pattern_type: '{intent}'}})` for more {intent} examples\n"
         
-        for doc in results:
-            response_text += f"**{doc['title']}** ({doc['category']})\n"
-            response_text += f"URL: {doc['url']}\n"
-            # Include a snippet of content
-            content_snippet = doc['content'][:200] + "..." if len(doc['content']) > 200 else doc['content']
-            response_text += f"Content: {content_snippet}\n\n"
+        # Track search pattern for learning
+        track_search_pattern(query, intent, len(results) > 0)
         
-        return [types.TextContent(type="text", text=response_text)]
+        # If user is struggling, add extra help
+        if len(search_history) >= 3 and all(not s['results_found'] for s in search_history[-3:]):
+            response_text += "\n\n🤔 **Having trouble finding what you need?**\n"
+            response_text += "- Try `getDocumentationOverview()` to see all available topics\n"
+            response_text += "- Use `quickHelp({task: 'your-task'})` for common tasks\n"
+            response_text += "- Check `listCategories()` to browse by category\n"
+        
+        return [types.TextContent(type="text", text=validate_response(response_text))]
     
     elif name == "getDocument":
         url = arguments["url"]
@@ -1439,12 +3548,12 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
         if not doc:
             return [types.TextContent(
                 type="text",
-                text=f"Document not found: {url}"
+                text=validate_response(f"Document not found: {url}")
             )]
         
         return [types.TextContent(
             type="text",
-            text=f"# {doc['title']}\n\n**URL:** {doc['url']}\n**Category:** {doc['category']}\n**Last Updated:** {doc['last_scraped']}\n\n## Content\n\n{doc['markdown_content']}"
+            text=validate_response(f"# {doc['title']}\n\n**URL:** {doc['url']}\n**Category:** {doc['category']}\n**Last Updated:** {doc['last_scraped']}\n\n## Content\n\n{doc['markdown_content']}")
         )]
     
     elif name == "listCategories":
@@ -1453,7 +3562,7 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
         
         return [types.TextContent(
             type="text",
-            text=f"Available categories:\n" + "\n".join(f"- {cat}" for cat in categories)
+            text=validate_response(f"Available categories:\n" + "\n".join(f"- {cat}" for cat in categories))
         )]
     
     elif name == "getStats":
@@ -1469,7 +3578,7 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
             for category, count in stats['categories'].items():
                 response_text += f"- {category}: {count}\n"
         
-        return [types.TextContent(type="text", text=response_text)]
+        return [types.TextContent(type="text", text=validate_response(response_text))]
     
     elif name == "findPatterns":
         pattern_type = arguments["pattern_type"]
@@ -1490,6 +3599,9 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
             
             # amplify/backend.ts patterns
             "configuration": "configure amplify_outputs.json defineBackend backend.ts setup",
+            
+            # Data field types
+            "field-types": "field types string integer float boolean datetime email phone array json enum",
             
             # Amplify Data patterns (the PRIMARY data solution)
             "data": "defineData model schema real-time subscription generateClient observeQuery authorization",
@@ -1554,7 +3666,7 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
         if not results:
             return [types.TextContent(
                 type="text",
-                text=f"No patterns found for '{pattern_type}'"
+                text=validate_response(f"No patterns found for '{pattern_type}'")
             )]
         
         response_text = f"**{pattern_type.title()} Patterns in Amplify Gen 2:**\n\n"
@@ -1583,37 +3695,91 @@ Use searchDocs to find specific topics or getDocument to retrieve full documenta
             
             response_text += "---\n\n"
         
-        return [types.TextContent(type="text", text=response_text)]
+        return [types.TextContent(type="text", text=validate_response(response_text))]
     
     elif name == "getCreateCommand":
-        response_text = """
-# CRITICAL: Creating Amplify Gen 2 + Next.js Application
+        response_text = """# Create Amplify Gen 2 + Next.js Application
 
-## The ONLY correct command:
+This creates a **clean, production-ready setup** with no sample code to remove - just the essentials you need.
+
+Based on the official AWS template: https://github.com/aws-samples/amplify-next-template
+
+## Step 1: Create Your Project
 
 ```bash
-npx create-amplify@latest --template nextjs
+# Replace 'your-app-name' with a descriptive name using hyphens (e.g., recipe-sharing-app)
+npx create-next-app@14.2.10 your-app-name --typescript --app --tailwind --eslint
+cd your-app-name
 ```
 
-## ⚠️ WARNING:
-- NEVER use `npm create amplify@latest` without the template flag
-- NEVER manually install Next.js after running create-amplify
-- ALWAYS include `--template nextjs`
+## Step 2: Install Amplify
 
-## Why this matters:
-1. Without `--template nextjs`, you get an incomplete setup
-2. Manual package installation causes version conflicts
-3. Only the template ensures compatible versions
-
-## For AI Assistants:
-When asked to create an Amplify app with Next.js, ALWAYS respond with:
 ```bash
-npx create-amplify@latest --template nextjs
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0 typescript@^5.0.0
 ```
 
-This is documented as the ONLY reliable way to create a working Amplify Gen 2 + Next.js application.
+## Step 3: Set Up Your Backend
+
+Create the backend structure:
+```bash
+mkdir -p amplify/auth amplify/data
+```
+
+**amplify/backend.ts:**
+```typescript
+import { defineBackend } from '@aws-amplify/backend';
+import { auth } from './auth/resource';
+
+export const backend = defineBackend({
+  auth,
+});
+```
+
+**amplify/auth/resource.ts:**
+```typescript
+import { defineAuth } from '@aws-amplify/backend';
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true,
+  },
+});
+```
+
+## Step 4: Configure Frontend
+
+**app/components/ConfigureAmplifyClientSide.tsx:**
+```typescript
+"use client";
+
+import { Amplify } from "aws-amplify";
+import outputs from "@/amplify_outputs.json";
+
+Amplify.configure(outputs, { ssr: true });
+
+export default function ConfigureAmplifyClientSide() {
+  return null;
+}
+```
+
+## Step 5: Start Development
+
+```bash
+npx ampx sandbox
+```
+
+In a new terminal:
+```bash
+npm run dev
+```
+
+Your application is now ready!
+
+## 💡 Pro Tip
+Use the `getCleanStarterConfig` tool for a fully customizable setup with all configuration files.
 """
-        return [types.TextContent(type="text", text=response_text)]
+        return [types.TextContent(type="text", text=validate_response(response_text))]
     
     elif name == "getQuickStartPatterns":
         task = arguments["task"]
@@ -1621,22 +3787,16 @@ This is documented as the ONLY reliable way to create a working Amplify Gen 2 + 
         patterns = {
             "create-app": """# Create New Amplify Gen 2 + Next.js App
 
+Based on: https://github.com/aws-samples/amplify-next-template
+
 ```bash
-npx create-amplify@latest --template nextjs my-app
+npx create-next-app@14.2.10 my-app --typescript --app --tailwind
 cd my-app
-npm run dev
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
 ```
 
-## Project Structure:
-```
-my-app/
-├── amplify/              # Backend configuration
-│   ├── auth/            # Authentication setup
-│   ├── data/            # Data models
-│   └── backend.ts       # Main backend config
-├── app/                 # Next.js App Router
-└── amplify_outputs.json # Generated config
-```""",
+Create your backend configuration in `amplify/backend.ts` and start with `npx ampx sandbox`.""",
 
             "add-auth": """# Add Authentication to Your App
 
@@ -2192,13 +4352,543 @@ const post = await client.models.Post.create({
         
         return [types.TextContent(
             type="text",
-            text=f"{pattern}\n\n💡 **Next Steps:**\nUse `searchDocs` for more details on any specific topic mentioned above."
+            text=validate_response(f"{pattern}\n\n💡 **Next Steps:**\nUse `searchDocs` for more details on any specific topic mentioned above.")
+        )]
+    
+    elif name == "getCleanStarterConfig":
+        # Get parameters with defaults
+        include_auth = arguments.get("includeAuth", True)
+        include_storage = arguments.get("includeStorage", False)
+        include_data = arguments.get("includeData", False)
+        styling = arguments.get("styling", "css")
+        
+        # Check if user query suggests project creation
+        if 'arguments' in locals() and 'user_query' in arguments:
+            user_query = arguments['user_query']
+            if should_provide_project_setup(user_query):
+                return [types.TextContent(
+                    type="text",
+                    text=validate_response(generate_project_setup_response(user_query))
+                )]
+        
+        # Build the response
+        response_text = """# Create Your Amplify Gen 2 + Next.js App
+
+## Setup Instructions
+
+### 1. Create Next.js App
+```bash
+npx create-next-app@14.2.10 my-app --typescript --app
+cd my-app
+```
+
+### 2. Install Amplify Dependencies (exact versions from AWS template)
+```bash
+npm install aws-amplify@^6.6.0 @aws-amplify/ui-react@^6.5.0
+npm install -D @aws-amplify/backend@^1.4.0 @aws-amplify/backend-cli@^1.2.0
+```
+"""
+
+        if styling == "tailwind":
+            response_text += """
+### 3. Install Tailwind CSS (Optional)
+```bash
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+```
+"""
+
+        response_text += f"""
+### {4 if styling == "tailwind" else 3}. Create Amplify Backend Structure
+```bash"""
+        
+        # Build mkdir commands based on what's included
+        mkdir_commands = []
+        if include_auth:
+            mkdir_commands.append("mkdir -p amplify/auth")
+        if include_data:
+            mkdir_commands.append("mkdir -p amplify/data")
+        if include_storage:
+            mkdir_commands.append("mkdir -p amplify/storage")
+        
+        if mkdir_commands:
+            response_text += "\n" + "\n".join(mkdir_commands)
+        else:
+            response_text += "\nmkdir -p amplify"  # At least create the amplify directory
+            
+        response_text += """
+```
+
+## Configuration Files
+
+### 📦 package.json (based on AWS template)
+```json
+{
+  "name": "my-amplify-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@aws-amplify/ui-react": "6.5.5",
+    "aws-amplify": "6.6.6",
+    "next": "14.2.10",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@aws-amplify/backend": "1.5.1",
+    "@aws-amplify/backend-cli": "1.3.0",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "aws-cdk": "^2",
+    "aws-cdk-lib": "^2",
+    "constructs": "^10.3.0",
+    "esbuild": "^0.23.1",
+    "tsx": "^4.19.0",
+    "typescript": "5.6.2"
+  }
+}
+```
+
+### 🔧 amplify/backend.ts
+```typescript
+import { defineBackend } from '@aws-amplify/backend';"""
+
+        if include_auth:
+            response_text += "\nimport { auth } from './auth/resource';"
+        if include_data:
+            response_text += "\nimport { data } from './data/resource';"
+        if include_storage:
+            response_text += "\nimport { storage } from './storage/resource';"
+            
+        response_text += "\n\nexport const backend = defineBackend({"
+        
+        backends = []
+        if include_auth:
+            backends.append("  auth")
+        if include_data:
+            backends.append("  data")
+        if include_storage:
+            backends.append("  storage")
+            
+        response_text += "\n" + ",\n".join(backends) + "\n});\n```"
+        
+        if include_auth:
+            response_text += """
+
+### 🔐 amplify/auth/resource.ts
+```typescript
+import { defineAuth } from '@aws-amplify/backend';
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true,
+  },
+});
+```"""
+
+        if include_data:
+            response_text += """
+
+### 📊 amplify/data/resource.ts
+```typescript
+import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+
+const schema = a.schema({
+  // Define your models here
+  // Example:
+  // Item: a
+  //   .model({
+  //     name: a.string(),
+  //     description: a.string(),
+  //   })
+  //   .authorization(allow => [allow.owner()]),
+});
+
+export type Schema = ClientSchema<typeof schema>;
+
+export const data = defineData({
+  schema,
+  authorizationModes: {
+    defaultAuthorizationMode: 'userPool',
+  },
+});
+```"""
+
+        if include_storage:
+            response_text += """
+
+### 📁 amplify/storage/resource.ts
+```typescript
+import { defineStorage } from '@aws-amplify/backend';
+
+export const storage = defineStorage({
+  name: 'myAppStorage',
+  access: (allow) => ({
+    'public/*': [
+      allow.guest.to(['read']),
+      allow.authenticated.to(['read', 'write', 'delete'])
+    ],
+    'protected/{entity_id}/*': [
+      allow.authenticated.to(['read', 'write', 'delete'])
+    ],
+    'private/{entity_id}/*': [
+      allow.entity('identity').to(['read', 'write', 'delete'])
+    ]
+  })
+});
+```"""
+
+        response_text += """
+
+### 📐 tsconfig.json (from AWS template)
+```json
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", "amplify"]
+}
+```
+
+### 📐 amplify/tsconfig.json
+```json
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "paths": {
+      "$amplify/*": ["./*"]
+    }
+  }
+}
+```
+
+### 🏗️ app/layout.tsx
+```typescript
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import ConfigureAmplifyClientSide from "./ConfigureAmplifyClientSide";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata: Metadata = {
+  title: "Amplify Gen 2 + Next.js App",
+  description: "Built with AWS Amplify Gen 2 and Next.js",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>
+        <ConfigureAmplifyClientSide />
+        {children}
+      </body>
+    </html>
+  );
+}
+```
+
+### ⚙️ app/ConfigureAmplifyClientSide.tsx
+```typescript
+"use client";
+
+import { Amplify } from "aws-amplify";
+import outputs from "@/amplify_outputs.json";
+
+Amplify.configure(outputs, { ssr: true });
+
+export default function ConfigureAmplifyClientSide() {
+  return null;
+}
+```
+
+### 🏠 app/page.tsx
+```typescript"""
+
+        if include_auth:
+            response_text += """
+"use client";
+
+import { Authenticator } from '@aws-amplify/ui-react';
+import '@aws-amplify/ui-react/styles.css';
+
+export default function Home() {
+  return (
+    <Authenticator>
+      {({ signOut, user }) => (
+        <main className="flex min-h-screen flex-col items-center justify-center p-24">
+          <h1 className="text-4xl font-bold mb-8">
+            Welcome {user?.username}!
+          </h1>
+          <p className="text-xl text-gray-600 mb-8">
+            Your Amplify Gen 2 + Next.js app is ready
+          </p>
+          <button
+            onClick={signOut}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            Sign out
+          </button>
+        </main>
+      )}
+    </Authenticator>
+  );
+}
+```"""
+        else:
+            response_text += """
+export default function Home() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center p-24">
+      <h1 className="text-4xl font-bold mb-8">
+        Welcome to Amplify Gen 2 + Next.js
+      </h1>
+      <p className="text-xl text-gray-600">
+        Your app is ready. Start building!
+      </p>
+    </main>
+  );
+}
+```"""
+
+        response_text += "\n\n### 🎨 app/globals.css\n```css"
+        
+        if styling == "tailwind":
+            response_text += """
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+"""
+            if styling == "tailwind":
+                response_text += """
+### 🎨 tailwind.config.js
+```javascript
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    './pages/**/*.{js,ts,jsx,tsx,mdx}',
+    './components/**/*.{js,ts,jsx,tsx,mdx}',
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+```"""
+        elif styling == "css":
+            response_text += """
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen,
+    Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  min-height: 100vh;
+  padding: 4rem 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+```"""
+        else:  # none
+            response_text += """
+/* Add your custom styles here */
+```"""
+
+        response_text += """
+
+## 🚀 Start Development
+
+```bash
+# Start the Amplify sandbox (local backend)
+npx ampx sandbox
+
+# In another terminal, start Next.js
+npm run dev
+```
+
+Visit http://localhost:3000 to see your app!
+
+## 📌 What You Get
+
+✅ **Ready to Build**: Start coding immediately
+✅ **Type Safety**: Full TypeScript configuration
+✅ **Latest Versions**: Compatible, tested package versions
+✅ **Modular**: Only includes what you need"""
+
+        if include_auth:
+            response_text += "\n✅ **Authentication**: Email/password auth ready to use"
+        if include_data:
+            response_text += "\n✅ **Data Layer**: Schema-based data modeling with real-time"
+        if include_storage:
+            response_text += "\n✅ **File Storage**: S3 storage with access controls"
+
+        response_text += """
+
+## 🎯 Next Steps
+
+1. **Customize Auth** (if included):
+   - Add social providers in `amplify/auth/resource.ts`
+   - Customize the Authenticator component styling
+
+2. **Define Data Models** (if included):
+   - Add your models to `amplify/data/resource.ts`
+   - Generate typed client with `npx ampx generate graphql-client-code`
+
+3. **Add Storage Features** (if included):
+   - Use `FileUploader` component for uploads
+   - Use `StorageImage` for displaying S3 images
+
+4. **Deploy to AWS**:
+   ```bash
+   npx ampx pipeline-deploy --branch main --app-id YOUR_APP_ID
+   ```
+
+## 🔗 Useful Commands
+
+- `npx ampx sandbox` - Start local backend
+- `npx ampx generate outputs` - Regenerate amplify_outputs.json
+- `npx ampx status` - Check backend status
+- `npm run build` - Build for production
+
+## 📚 Learn More
+
+- [Amplify Gen 2 Docs](https://docs.amplify.aws/nextjs)
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Amplify UI Components](https://ui.docs.amplify.aws)
+
+---
+
+💡 **Tip**: This configuration provides exactly what you need to start building!
+"""
+        
+        return [types.TextContent(
+            type="text",
+            text=validate_response(response_text)
+        )]
+    
+    elif name == "getContextualWarnings":
+        # Get context from arguments
+        context = {
+            'currentFile': arguments.get('currentFile', ''),
+            'lastError': arguments.get('lastError', ''),
+            'searchQuery': arguments.get('searchQuery', '')
+        }
+        
+        # Get warnings based on context
+        warnings = get_contextual_warnings(context)
+        
+        if not warnings:
+            return [types.TextContent(
+                type="text",
+                text="✅ No issues detected in current context. You're following best practices!"
+            )]
+        
+        # Build response
+        response_text = "⚠️ **Contextual Warnings:**\n\n"
+        
+        # Group warnings by severity
+        high_severity = [w for w in warnings if w.get('severity') == 'high']
+        medium_severity = [w for w in warnings if w.get('severity') == 'medium']
+        low_severity = [w for w in warnings if w.get('severity') == 'low']
+        
+        if high_severity:
+            response_text += "🔴 **High Priority:**\n"
+            for warning in high_severity:
+                response_text += f"- {warning['message']}\n"
+            response_text += "\n"
+        
+        if medium_severity:
+            response_text += "🟡 **Medium Priority:**\n"
+            for warning in medium_severity:
+                response_text += f"- {warning['message']}\n"
+            response_text += "\n"
+        
+        if low_severity:
+            response_text += "🟢 **Low Priority:**\n"
+            for warning in low_severity:
+                response_text += f"- {warning['message']}\n"
+            response_text += "\n"
+        
+        # Add suggestions based on warning types
+        warning_types = set(w['type'] for w in warnings)
+        
+        response_text += "💡 **Helpful Resources:**\n"
+        if 'setup' in warning_types:
+            response_text += "- Use `quickHelp({task: 'create-app'})` for correct setup\n"
+        if 'auth' in warning_types:
+            response_text += "- Use `searchDocs({query: 'authorization patterns'})` for auth examples\n"
+        if 'data' in warning_types:
+            response_text += "- Use `quickHelp({task: 'data-field-types'})` for field type reference\n"
+        if 'imports' in warning_types:
+            response_text += "- Search for 'TypeScript imports' for correct import syntax\n"
+        
+        return [types.TextContent(
+            type="text",
+            text=validate_response(response_text)
         )]
     
     else:
         return [types.TextContent(
             type="text",
-            text=f"Unknown tool: {name}"
+            text=validate_response(f"Unknown tool: {name}")
         )]
 
 async def main():
